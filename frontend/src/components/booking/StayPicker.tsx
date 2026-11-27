@@ -105,11 +105,11 @@ export function NightRangePicker({ start, end, bookedNights, onChange }: { start
         <button type="button" className="grid w-full grid-cols-2 overflow-hidden rounded-md border text-left hover:border-foreground/30">
           <span className="border-r px-3 py-2">
             <span className="block text-xs text-muted-foreground">{t("booking.checkIn")}</span>
-            <span className="block text-sm font-medium">{shortDate(start + "T12:00:00+07:00")}</span>
+            <span className="block text-sm font-medium">{shortDate(start + "T12:00:00+07:00", i18n.language)}</span>
           </span>
           <span className="px-3 py-2">
             <span className="block text-xs text-muted-foreground">{t("booking.checkOut")}</span>
-            <span className="block text-sm font-medium">{shortDate(end + "T12:00:00+07:00")}</span>
+            <span className="block text-sm font-medium">{shortDate(end + "T12:00:00+07:00", i18n.language)}</span>
           </span>
         </button>
       </PopoverTrigger>
@@ -179,7 +179,7 @@ export function HourPicker({ start, end, openingTime, closingTime, minHours, bus
             <CalendarDays className="size-4 text-muted-foreground" />
             <span>
               <span className="block text-xs text-muted-foreground">{t("booking.date")}</span>
-              <span className="block text-sm font-medium">{shortDate(day + "T12:00:00+07:00")}</span>
+              <span className="block text-sm font-medium">{shortDate(day + "T12:00:00+07:00", i18n.language)}</span>
             </span>
           </button>
         </PopoverTrigger>

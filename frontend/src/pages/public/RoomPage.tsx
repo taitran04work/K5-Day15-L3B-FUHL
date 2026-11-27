@@ -1,4 +1,4 @@
-import { Link, useNavigate, useParams, useSearchParams } from "react-router"
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router"
 import { useTranslation } from "react-i18next"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { ChevronLeft } from "lucide-react"
@@ -8,8 +8,9 @@ import { ErrorState } from "@/components/common"
 import { AmenityList, Gallery, QuoteSummary } from "@/components/booking/BookingParts"
 import { GuestStepper, HourPicker, ModeToggle, NightRangePicker, defaultStay, useBusy, type StayValue } from "@/components/booking/StayPicker"
 import { api, ApiError } from "@/lib/api"
-import { money } from "@/lib/format"
+import { useLocalizedFormat } from "@/lib/format"
 import type { BookingMode, Quote, Room } from "@/lib/types"
+import { GuestPageHeading } from "./GuestVisuals"
 import { usePublic } from "./PublicLayout"
 
 export function useStayFromParams(room: Room | undefined, openingTime: string): [StayValue, (s: StayValue) => void] {
@@ -30,7 +31,9 @@ export default function RoomPage() {
   const { home, slug } = usePublic()
   const { roomId = "" } = useParams()
   const { t } = useTranslation()
+  const { money } = useLocalizedFormat()
   const navigate = useNavigate()
+  const { search } = useLocation()
   const tenant = home.tenant
   const room = useQuery({ queryKey: ["public-room", slug, roomId], queryFn: () => api.get<Room>(`/api/public/${slug}/rooms/${roomId}`) })
   const [stay, setStay] = useStayFromParams(room.data, tenant.openingTime)
@@ -66,40 +69,35 @@ export default function RoomPage() {
 
   return (
     <div className="mx-auto max-w-[1280px] px-4 pb-28 pt-8 sm:px-8 lg:pb-16">
-      <Link
-        to={`/h/${slug}`}
-        className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ChevronLeft className="size-4 transition-transform duration-200 group-hover:-translate-x-0.5" />
-        <span>{t("room.allRooms")}</span>
-      </Link>
+      <Button asChild variant="outline" size="sm" className="rounded-full">
+        <Link to={`/h/${slug}/rooms${search}`}><ChevronLeft aria-hidden /> {t("room.allRooms")}</Link>
+      </Button>
 
-      <div className="mt-4 max-w-3xl">
-        <h1 className="font-editorial text-3xl font-normal leading-tight tracking-tight sm:text-5xl">{r.name}</h1>
-        <p className="mt-2.5 text-sm text-muted-foreground sm:text-base">
-          {[r.beds, t("room.upToGuests", { count: r.maxGuests }), r.areaM2 ? `${r.areaM2} m²` : null].filter(Boolean).join(" · ")}
-        </p>
-      </div>
+      <GuestPageHeading
+        className="mt-5 max-w-3xl"
+        title={r.name}
+        description={[r.beds, t("room.upToGuests", { count: r.maxGuests }), r.areaM2 ? `${r.areaM2} m²` : null].filter(Boolean).join(" · ")}
+      />
 
-      <div className="mt-8">
+      <div className="mt-7 [&>div:first-child]:border">
         <Gallery photos={r.photos} title={r.name} />
       </div>
 
-      <div className="mt-12 grid gap-12 lg:grid-cols-[1fr_400px] lg:gap-16">
-        <div className="min-w-0 space-y-12">
+      <div className="mt-8 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(340px,400px)] lg:gap-8">
+        <div className="guest-panel min-w-0 space-y-8 p-5 sm:p-7 lg:p-8">
           {r.description && (
             <p className="max-w-2xl text-base leading-relaxed text-foreground/90 sm:text-[17px]">{r.description}</p>
           )}
 
           {r.amenities.length > 0 && (
-            <section className="border-t pt-10">
-              <h2 className="font-editorial text-2xl font-normal sm:text-3xl">{t("room.amenities")}</h2>
-              <AmenityList amenities={r.amenities} className="mt-6" />
+            <section className="border-t pt-7 first:border-0 first:pt-0">
+              <h2 className="font-display text-xl font-bold sm:text-3xl">{t("room.amenities")}</h2>
+              <AmenityList amenities={r.amenities} className="mt-5" />
             </section>
           )}
 
-          <section className="border-t pt-10">
-            <h2 className="font-editorial text-2xl font-normal sm:text-3xl">{t("room.pricesTitle")}</h2>
+          <section className="border-t pt-7 first:border-0 first:pt-0">
+            <h2 className="font-display text-xl font-bold sm:text-3xl">{t("room.pricesTitle")}</h2>
             <dl className="mt-6 max-w-md divide-y border-y text-sm">
               {r.supportsNightly && (
                 <div className="flex justify-between py-3.5">
@@ -124,11 +122,11 @@ export default function RoomPage() {
           </section>
         </div>
 
-        <aside id="booking-panel" className="scroll-mt-24 lg:sticky lg:top-24 lg:h-fit">
-          <div className="space-y-4 rounded-2xl border bg-card p-6 shadow-[0_16px_40px_-24px_rgba(23,22,20,0.16)]">
+        <aside id="booking-panel" className="scroll-mt-28 lg:sticky lg:top-24 lg:h-fit">
+          <div className="guest-panel space-y-4 p-5 sm:p-6">
             <div className="flex items-baseline justify-between gap-2 border-b pb-4">
               <p className="text-base">
-                <span className="text-2xl font-semibold tabular text-foreground">{money(unitPrice)}</span>{" "}
+                <span className="font-display text-2xl font-bold tabular text-foreground">{money(unitPrice)}</span>{" "}
                 <span className="text-sm text-muted-foreground">{stay.mode === "Nightly" ? t("room.perNight") : t("room.perHour")}</span>
               </p>
             </div>
@@ -186,7 +184,7 @@ export default function RoomPage() {
       </div>
 
       {/* Mobile fixed bottom bar */}
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-[var(--editorial-surface)]/95 px-4 py-3 backdrop-blur-md sm:pr-20 lg:hidden">
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-md sm:pr-20 lg:hidden">
         <div className="mx-auto flex max-w-[1280px] items-center justify-between gap-4">
           <div className="min-w-0">
             <p className="text-xs text-muted-foreground">{t("room.fromPrice")}</p>

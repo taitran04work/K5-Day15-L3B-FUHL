@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState, ErrorState, KeyValue, Spinner, StatusBadge, useErrorMessage } from "@/components/common"
 import { BookingDrawer } from "@/components/app/BookingDrawer"
 import { MessageBubble, mergeMessages } from "@/components/chat/ChatWidget"
+import { getLanguageOption } from "@/i18n/languages"
 import { api, qs } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { useInboxHub } from "@/lib/realtime"
@@ -206,7 +207,7 @@ export default function Inbox() {
               )}
             </header>
             {conv.needsAttention && conv.handoffReason && (
-              <div className="border-b bg-amber-50/70 px-6 py-2.5 text-sm text-amber-900">
+              <div className="border-b bg-amber-50/70 px-6 py-2.5 text-sm text-amber-900 dark:bg-warning/10 dark:text-warning">
                 {t("inbox.handoffReason")}: {conv.handoffReason}
               </div>
             )}
@@ -263,7 +264,7 @@ export default function Inbox() {
           <dl className="mt-2">
             <KeyValue label={t("bookings.name")}>{conv.guestName ?? t("inbox.unknown")}</KeyValue>
             <KeyValue label={t("bookings.phone")}>{conv.guestPhone ? phone(conv.guestPhone) : t("inbox.unknown")}</KeyValue>
-            <KeyValue label={t("inbox.language")}>{conv.language === "vi" ? "Tiếng Việt" : "English"}</KeyValue>
+            <KeyValue label={t("inbox.language")}>{getLanguageOption(conv.language).short}</KeyValue>
             <KeyValue label={t("inbox.channel")}>{conv.channel === "Zalo" ? "Zalo" : t("inbox.website")}</KeyValue>
           </dl>
           <h2 className="mt-8 text-sm font-semibold">{t("inbox.booking")}</h2>

@@ -83,6 +83,7 @@ public static class DependencyInjection
 
         services.AddScoped<Concierge.ConciergeTools>();
         services.AddScoped<Concierge.OfflineConcierge>();
+        services.AddSingleton<Concierge.TenantAi>();
         services.AddScoped<Concierge.ConciergeService>();
         services.AddScoped<ZaloWebhookService>();
         return services;

@@ -35,15 +35,15 @@ public class ChatController(StayraDbContext db, ConciergeService concierge) : Pu
             {
                 TenantId = tenant.Id, Channel = ChannelType.WebWidget,
                 VisitorToken = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)),
-                Language = req.Language is "vi" or "en" ? req.Language : tenant.DefaultLanguage,
+                Language = tenant.DefaultLanguage,
             };
             db.Conversations.Add(conv);
             await db.SaveChangesAsync();
             await concierge.GreetAsync(conv, tenant);
         }
-        else if (req.Language is "vi" or "en" && conv.Language != req.Language)
+        else if (conv.Language != tenant.DefaultLanguage)
         {
-            conv.Language = req.Language;
+            conv.Language = tenant.DefaultLanguage;
             await db.SaveChangesAsync();
         }
         return new { conversationId = conv.Id, visitorToken = conv.VisitorToken, language = conv.Language, status = conv.Status, messages = await Visible(conv.Id) };
@@ -73,7 +73,7 @@ public class ChatController(StayraDbContext db, ConciergeService concierge) : Pu
     public async Task<IActionResult> Language(string slug, Guid conversationId, [FromBody] LanguageRequest req)
     {
         var conv = await Authorize(conversationId, req.Token);
-        if (req.Language is "vi" or "en") conv.Language = req.Language;
+        conv.Language = CurrentTenant.DefaultLanguage;
         await db.SaveChangesAsync();
         return NoContent();
     }

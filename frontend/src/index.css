@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@500;600;700&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "@fontsource-variable/inter";
@@ -7,7 +7,7 @@
 
 /*
   Stayra design tokens
-  - One accent colour (--brand), set per tenant at runtime. Everything else is neutral.
+  - The Stayra workspace uses orange. Guest pages use the property's accent.
   - Type scale: 13 / 14 / 16 / 20 / 28 / 40  ->  text-xs / sm / base / lg / xl / 2xl
 */
 @theme inline {
@@ -52,6 +52,8 @@
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
   --color-brand-soft: var(--brand-soft);
+  --color-status-positive: var(--status-positive);
+  --color-status-positive-soft: var(--status-positive-soft);
 
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -61,11 +63,10 @@
 }
 
 :root {
-  --brand: #1f5f4a;
-  --brand-foreground: #ffffff;
+  --brand: var(--guest-brand, #1f5f4a);
+  --brand-foreground: var(--guest-brand-foreground, #ffffff);
   --brand-soft: color-mix(in oklab, var(--brand) 8%, white);
 
-  --font-editorial: "Cormorant Garamond", Georgia, "Times New Roman", serif;
   --editorial-surface: #faf8f5;
   --editorial-surface-alt: #f3f0ea;
   --editorial-ink: #171614;
@@ -92,10 +93,96 @@
   --destructive: #b42318;
   --warning: #8a5300;
   --success: #1d6b45;
+  --status-positive: var(--brand);
+  --status-positive-soft: var(--brand-soft);
   --border: #e7e7e4;
   --input: #dcdcd8;
   --ring: var(--brand);
   --radius: 10px;
+}
+
+:root[data-stayra-theme] {
+  color-scheme: light;
+  --brand: #b83a0b;
+  --brand-foreground: #ffffff;
+  --brand-soft: #fff0e6;
+  --background: #ffffff;
+  --canvas: #f8f5f2;
+  --foreground: #211a16;
+  --card-foreground: var(--foreground);
+  --popover-foreground: var(--foreground);
+  --secondary: #f2ece6;
+  --secondary-foreground: var(--foreground);
+  --muted: #f2ece6;
+  --muted-foreground: #62564f;
+  --subtle: #73645a;
+  --accent: #f9ebe1;
+  --accent-foreground: #83320d;
+  --border: #e9dfd6;
+  --input: #d9cbbf;
+  --ring: var(--brand);
+  --status-positive: var(--success);
+  --status-positive-soft: color-mix(in oklab, var(--success) 13%, var(--card));
+  --sidebar-surface: #221a15;
+  --sidebar-text: #fff6ed;
+  --sidebar-muted: #d1c1b3;
+  --sidebar-divider: #48372b;
+  --sidebar-hover: #352820;
+  --sidebar-selected: #3c2c22;
+  --sidebar-accent: #ffac6d;
+  --auth-shadow: 0 24px 64px -38px rgb(88 41 16 / 35%);
+}
+
+:root[data-stayra-theme="dark"] {
+  color-scheme: dark;
+  --brand: #ff9a50;
+  --brand-foreground: #22140c;
+  --brand-soft: #302217;
+  --background: #101114;
+  --canvas: #0d0e11;
+  --foreground: #f7f2ee;
+  --card: #17191e;
+  --popover: #1c1e24;
+  --secondary: #272830;
+  --muted: #22242b;
+  --muted-foreground: #b7b7be;
+  --subtle: #a09da6;
+  --accent: #35271f;
+  --accent-foreground: #ffbf91;
+  --destructive: #ff8a83;
+  --warning: #f2b86b;
+  --success: #83d6a6;
+  --border: #30323b;
+  --input: #3f414c;
+  --sidebar-surface: #14151a;
+  --sidebar-text: #f7f2ee;
+  --sidebar-muted: #b9bac3;
+  --sidebar-divider: #30313a;
+  --sidebar-hover: #22242b;
+  --sidebar-selected: #30251e;
+  --sidebar-accent: #ffac6d;
+  --auth-shadow: 0 26px 70px -28px rgb(0 0 0 / 65%);
+}
+
+.system-sidebar {
+  border-color: var(--sidebar-divider);
+  background: var(--sidebar-surface);
+  color: var(--sidebar-text);
+}
+
+.auth-page {
+  background: radial-gradient(ellipse at 50% 18%, color-mix(in oklab, var(--brand) 10%, transparent), transparent 55%), var(--canvas);
+}
+
+.website-color-preview {
+  color-scheme: light;
+  --background: var(--editorial-surface);
+  --muted-foreground: var(--editorial-muted);
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-foreground);
+  --ring: var(--brand);
+  --brand-soft: color-mix(in oklab, var(--brand) 8%, white);
+  --border: var(--editorial-border);
 }
 
 @layer base {
@@ -123,6 +210,9 @@
   ::selection {
     background: color-mix(in oklab, var(--brand) 18%, white);
   }
+  [data-stayra-theme] ::selection {
+    background: color-mix(in oklab, var(--brand) 30%, var(--background));
+  }
   h1,
   h2,
   h3,
@@ -141,9 +231,10 @@
   .scrollbar-none::-webkit-scrollbar {
     display: none;
   }
-  .font-editorial {
-    font-family: var(--font-editorial);
-    letter-spacing: -0.015em;
+  .font-display {
+    font-family: "Be Vietnam Pro", var(--font-sans);
+    font-feature-settings: "ss01", "tnum";
+    letter-spacing: -0.035em;
   }
 }
 
@@ -162,6 +253,118 @@
   --secondary-foreground: var(--editorial-ink);
   background-color: var(--editorial-surface);
   color: var(--editorial-ink);
+}
+
+.guest-storefront {
+  color-scheme: dark;
+  --background: #0b0f16;
+  --canvas: #101620;
+  --foreground: #fbf6ec;
+  --card: #141c27;
+  --card-foreground: var(--foreground);
+  --popover: #17212d;
+  --popover-foreground: var(--foreground);
+  --muted: #202934;
+  --muted-foreground: #c2c8ce;
+  --subtle: #a5aeb8;
+  --secondary: #202934;
+  --secondary-foreground: var(--foreground);
+  --accent: #273242;
+  --accent-foreground: var(--foreground);
+  --border: #36414e;
+  --input: #465362;
+  --ring: color-mix(in oklab, var(--brand) 40%, white);
+  --brand-soft: color-mix(in oklab, var(--brand) 22%, var(--card));
+  --destructive: #ffaaa2;
+  --warning: #f6c17e;
+  --success: #91ddb0;
+  --status-positive: var(--success);
+  --status-positive-soft: color-mix(in oklab, var(--success) 14%, var(--card));
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.guest-storefront :focus-visible {
+  outline-color: var(--ring);
+}
+
+.guest-storefront [data-slot="button"][data-variant="default"] {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 22%);
+}
+
+.guest-panel {
+  border: 1px solid var(--border);
+  border-radius: 1.4rem;
+  background-color: color-mix(in oklab, var(--card) 94%, transparent);
+  box-shadow: 0 24px 64px -40px rgb(0 0 0 / 80%);
+}
+
+.legible {
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 2px 14px rgba(0, 0, 0, 0.35);
+}
+
+/* Landing: the printed pricing / FAQ sheets that sit on the hanging boards */
+.paper-sheet {
+  --background: #f6efe2;
+  --canvas: #efe6d5;
+  --card: #fffaf1;
+  --card-foreground: #1a1510;
+  --foreground: #1a1510;
+  --muted: #ebe2d1;
+  --muted-foreground: #5a5248;
+  --border: #e0d4bf;
+  --input: #d9ccb5;
+  --secondary: #ebe2d1;
+  --secondary-foreground: #1a1510;
+  --accent: #ebe2d1;
+  --accent-foreground: #1a1510;
+  --brand: #1f5f4a;
+  --brand-foreground: #ffffff;
+  --brand-soft: #e1ece4;
+  background: #f6efe2;
+  color: #1a1510;
+  scrollbar-width: thin;
+  scrollbar-color: #c9b99c transparent;
+}
+.paper-sheet section {
+  background: transparent !important;
+  border-color: transparent !important;
+  padding-top: 2.75rem;
+  padding-bottom: 2.75rem;
+}
+.paper-sheet section h2 {
+  font-family: "Be Vietnam Pro", var(--font-sans);
+  font-weight: 700;
+  font-size: clamp(1.7rem, 2.6vw, 2.4rem);
+  line-height: 1.12;
+  letter-spacing: -0.035em;
+}
+
+/* Route-change curtain */
+.route-curtain {
+  background:
+    radial-gradient(60% 60% at 50% 50%, #17392f 0%, transparent 70%),
+    #07120f;
+}
+.route-curtain[data-system] {
+  background: radial-gradient(60% 60% at 50% 50%, #542916 0%, transparent 72%), #17110d;
+}
+
+/* Staggered entrance for direct children of app/public pages */
+.stagger-enter > * {
+  animation: stayra-page-enter 560ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+.stagger-enter > *:nth-child(2) { animation-delay: 60ms; }
+.stagger-enter > *:nth-child(3) { animation-delay: 120ms; }
+.stagger-enter > *:nth-child(4) { animation-delay: 180ms; }
+.stagger-enter > *:nth-child(5) { animation-delay: 240ms; }
+.stagger-enter > *:nth-child(n + 6) { animation-delay: 300ms; }
+@media (prefers-reduced-motion: reduce) {
+  .stagger-enter > * {
+    animation: none;
+  }
 }
 
 [data-slot="dialog-overlay"] {
@@ -193,31 +396,15 @@
   }
 }
 
-@keyframes stayra-panel-enter {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.99);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
 .animate-page-enter {
-  animation: stayra-page-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.animate-panel-enter {
-  animation: stayra-panel-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: stayra-page-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
   }
-  .animate-page-enter,
-  .animate-panel-enter {
+  .animate-page-enter {
     animation: none;
   }
 }

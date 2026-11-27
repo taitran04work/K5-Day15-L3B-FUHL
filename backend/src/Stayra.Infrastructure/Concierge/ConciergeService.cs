@@ -14,8 +14,8 @@ using DomainMessage = Stayra.Domain.Message;
 namespace Stayra.Infrastructure.Concierge;
 
 /// <summary>
-/// One concierge for every channel. Persists the guest message, runs Claude with server-side tools (or the offline
-/// assistant when no API key is configured), persists tool calls, and delivers the reply through IGuestMessenger.
+/// One concierge for every channel. Persists the guest message, runs Claude with server-side tools using the homestay's
+/// own API key (or the offline assistant when it has none), persists tool calls, and delivers the reply through IGuestMessenger.
 /// </summary>
 public partial class ConciergeService(
     IAppDbContext db,
@@ -24,14 +24,13 @@ public partial class ConciergeService(
     IRealtimeNotifier realtime,
     ConciergeTools tools,
     OfflineConcierge offline,
+    TenantAi ai,
     IConfiguration config,
     TimeProvider clock,
     ILogger<ConciergeService> log)
 {
     public const int MaxInputChars = 2000;
     private const int HistoryLimit = 30;
-
-    public bool AiEnabled => !string.IsNullOrWhiteSpace(config["Anthropic:ApiKey"]);
 
     /// <summary>Handles one inbound guest message. Returns the new guest-visible messages (guest + system + bot).</summary>
     public async Task<List<DomainMessage>> HandleGuestMessageAsync(Guid conversationId, string text, CancellationToken ct = default)
@@ -63,9 +62,10 @@ public partial class ConciergeService(
                 var ctx = new ToolContext(tenant, conv);
                 string reply;
                 int inTok = 0, outTok = 0;
-                if (AiEnabled)
+                var client = ai.Client(tenant);
+                if (client is not null)
                 {
-                    try { (reply, inTok, outTok) = await RunClaudeAsync(ctx, ct); }
+                    try { (reply, inTok, outTok) = await RunClaudeAsync(client, ctx, ct); }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         log.LogError(ex, "Claude call failed for conversation {Id}; falling back to offline assistant", conv.Id);
@@ -107,10 +107,9 @@ public partial class ConciergeService(
 
     // ---------------- Claude ----------------
 
-    private async Task<(string Reply, int InputTokens, int OutputTokens)> RunClaudeAsync(ToolContext ctx, CancellationToken ct)
+    private async Task<(string Reply, int InputTokens, int OutputTokens)> RunClaudeAsync(AnthropicClient client, ToolContext ctx, CancellationToken ct)
     {
-        var client = new AnthropicClient { ApiKey = config["Anthropic:ApiKey"]! };
-        var model = string.IsNullOrWhiteSpace(config["Anthropic:Model"]) ? "claude-haiku-5-5" : config["Anthropic:Model"]!;
+        var model = ai.Model(ctx.Tenant);
         var maxIterations = Math.Clamp(config.GetValue("Anthropic:MaxIterations", 6), 1, 10);
         var system = BuildSystemPrompt(ctx.Tenant, ctx.Conversation);
         var toolUnions = ConciergeTools.Definitions.Select(d => (ToolUnion)new Tool

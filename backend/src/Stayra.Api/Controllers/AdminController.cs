@@ -13,8 +13,9 @@ namespace Stayra.Api.Controllers;
 public record AdminTenantDto(Guid Id, string Slug, string Name, TenantStatus Status, string? OwnerEmail, string? Address, int Rooms, int BookingsLast30,
     decimal RevenueLast30, int Conversations30, long TokensLast30, DateTimeOffset CreatedAt);
 
-public record CreateTenantRequest(string Name, string? Slug, string OwnerEmail, string OwnerName, string? Address, string? Phone, string DefaultLanguage = "en");
-public record CreateTenantResponse(AdminTenantDto Tenant, string InviteUrl, string TemporaryPassword);
+public record CreateTenantRequest(string Name, string? Slug, string OwnerEmail, string OwnerName, string? Address, string? Phone, string DefaultLanguage = "en",
+    string OwnerPassword = "", double? Latitude = null, double? Longitude = null, string? Description = null, string? ContactEmail = null);
+public record CreateTenantResponse(AdminTenantDto Tenant, string LoginEmail);
 
 public class CreateTenantValidator : AbstractValidator<CreateTenantRequest>
 {
@@ -25,6 +26,16 @@ public class CreateTenantValidator : AbstractValidator<CreateTenantRequest>
         RuleFor(x => x.OwnerName).NotEmpty().WithErrorCode("required");
         RuleFor(x => x.Slug).Matches("^[a-z0-9-]{3,60}$").When(x => !string.IsNullOrEmpty(x.Slug)).WithErrorCode("slug_format");
         RuleFor(x => x.DefaultLanguage).Must(l => l is "en" or "vi").WithErrorCode("invalid");
+        // the same basics the owner's Website settings show — a new homestay page shouldn't start empty
+        RuleFor(x => x.Description).NotEmpty().WithErrorCode("required").MaximumLength(2000).WithErrorCode("too_long");
+        RuleFor(x => x.Address).NotEmpty().WithErrorCode("required").MaximumLength(300).WithErrorCode("too_long");
+        RuleFor(x => x.Phone).NotEmpty().WithErrorCode("required").Must(p => Phone.NormalizeVn(p) != null).When(x => !string.IsNullOrEmpty(x.Phone)).WithErrorCode("phone");
+        RuleFor(x => x.ContactEmail).EmailAddress().When(x => !string.IsNullOrEmpty(x.ContactEmail)).WithErrorCode("email");
+        RuleFor(x => x.OwnerPassword).NotEmpty().WithErrorCode("required").MinimumLength(8).WithErrorCode("password_too_short");
+        RuleFor(x => x.Latitude).InclusiveBetween(-90, 90).When(x => x.Latitude.HasValue).WithErrorCode("out_of_range");
+        RuleFor(x => x.Longitude).InclusiveBetween(-180, 180).When(x => x.Longitude.HasValue).WithErrorCode("out_of_range");
+        RuleFor(x => x.Longitude).NotNull().When(x => x.Latitude.HasValue).WithErrorCode("required");
+        RuleFor(x => x.Latitude).NotNull().When(x => x.Longitude.HasValue).WithErrorCode("required");
     }
 }
 
@@ -65,23 +76,25 @@ public class AdminController(StayraDbContext db, TimeProvider clock, IConfigurat
         if (await db.Users.AnyAsync(u => u.Email == email))
             throw new AppException(409, "email_taken", "There is already an account with that email.", new Dictionary<string, string[]> { ["ownerEmail"] = ["email_taken"] });
 
-        var tenant = new Tenant { Name = req.Name.Trim(), Slug = slug, Address = req.Address, Phone = req.Phone, Email = email, DefaultLanguage = req.DefaultLanguage };
-        var temp = "Stayra-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(4));
+        var tenant = new Tenant
+        {
+            Name = req.Name.Trim(), Slug = slug, Description = req.Description?.Trim(), Address = req.Address?.Trim(),
+            Phone = Phone.NormalizeVn(req.Phone), Email = string.IsNullOrWhiteSpace(req.ContactEmail) ? email : req.ContactEmail.Trim().ToLower(),
+            DefaultLanguage = req.DefaultLanguage, Latitude = req.Latitude, Longitude = req.Longitude,
+        };
+        // the admin sets the owner's password directly; no invite link to deliver
         var owner = new User
         {
             TenantId = tenant.Id, Email = email, Name = req.OwnerName.Trim(), Role = UserRole.Owner,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(temp),
-            ResetToken = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(24)), ResetTokenExpiresAt = clock.GetUtcNow().AddDays(7),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.OwnerPassword),
         };
         db.Tenants.Add(tenant);
         db.Users.Add(owner);
         db.AuditLogs.Add(new AuditLog { TenantId = tenant.Id, Actor = $"admin:{User.EmailOf()}", Action = "tenant.created", EntityType = nameof(Tenant), EntityId = tenant.Id });
         await db.SaveChangesAsync();
 
-        var web = config["App:WebBaseUrl"] ?? "http://localhost:5173";
-        var invite = $"{web}/reset-password?token={owner.ResetToken}&invite=1";
-        log.LogInformation("[Email stub] Invite for {Email} to {Tenant}: {Url}", email, tenant.Name, invite);
-        return new CreateTenantResponse(new AdminTenantDto(tenant.Id, tenant.Slug, tenant.Name, tenant.Status, email, tenant.Address, 0, 0, 0, 0, 0, tenant.CreatedAt), invite, temp);
+        log.LogInformation("Tenant {Tenant} created with owner {Email}", tenant.Name, email);
+        return new CreateTenantResponse(new AdminTenantDto(tenant.Id, tenant.Slug, tenant.Name, tenant.Status, email, tenant.Address, 0, 0, 0, 0, 0, tenant.CreatedAt), email);
     }
 
     [HttpPost("tenants/{id:guid}/status")]

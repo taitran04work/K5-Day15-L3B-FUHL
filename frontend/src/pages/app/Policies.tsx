@@ -135,11 +135,11 @@ function Review({ policyId, docs, onClose }: { policyId: string; docs: PolicyDoc
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-6">
           {warnings.length > 0 && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3">
-              <p className="flex items-center gap-2 text-sm font-medium text-amber-900">
+            <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-amber-900 dark:border-warning/30 dark:bg-warning/10 dark:text-warning">
+              <p className="flex items-center gap-2 text-sm font-medium">
                 <AlertTriangle className="size-4" /> {t("policies.warningsTitle")}
               </p>
-              <ul className="mt-1.5 list-disc space-y-0.5 pl-6 text-sm text-amber-900">
+              <ul className="mt-1.5 list-disc space-y-0.5 pl-6 text-sm">
                 {warnings.map((w, i) => (
                   <li key={i}>{w.message}</li>
                 ))}

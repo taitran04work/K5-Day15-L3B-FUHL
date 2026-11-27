@@ -1,28 +1,26 @@
 import { useTranslation } from "react-i18next"
+import { getLanguageOption, languageOptions } from "@/i18n/languages"
 import { cn } from "@/lib/utils"
 
-export function LanguageSwitch({ className, onChange, compact = false }: { className?: string; onChange?: (lng: "en" | "vi") => void; compact?: boolean }) {
+export function LanguageSwitch({ className }: { className?: string }) {
   const { i18n, t } = useTranslation()
-  const current = i18n.language?.startsWith("vi") ? "vi" : "en"
+  const current = getLanguageOption(i18n.language).value
   return (
     <div role="radiogroup" aria-label={t("nav.language")} className={cn("inline-flex rounded-md border p-0.5 text-xs", className)}>
-      {(["en", "vi"] as const).map((lng) => (
+      {languageOptions.map(({ value, short, name }) => (
         <button
-          key={lng}
+          key={value}
           type="button"
           role="radio"
-          aria-checked={current === lng}
-          aria-label={lng === "en" ? "English" : "Tiếng Việt"}
-          onClick={() => {
-            void i18n.changeLanguage(lng)
-            onChange?.(lng)
-          }}
+          aria-checked={current === value}
+          aria-label={name}
+          onClick={() => void i18n.changeLanguage(value)}
           className={cn(
             "flex-1 whitespace-nowrap rounded-[5px] px-2.5 py-1 font-medium text-muted-foreground transition-colors",
-            current === lng && "bg-foreground text-background",
+            current === value && "bg-foreground text-background",
           )}
         >
-          {compact ? lng.toUpperCase() : lng === "en" ? "English" : "Tiếng Việt"}
+          {short}
         </button>
       ))}
     </div>

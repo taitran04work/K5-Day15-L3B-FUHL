@@ -21,7 +21,8 @@ interface FaqItem {
   a: string
 }
 
-export function PricingAndFaq() {
+/** `part` lets the landing deck show pricing and FAQ on separate boards. */
+export function PricingAndFaq({ part = "both" }: { part?: "pricing" | "faq" | "both" }) {
   const { t } = useTranslation()
   const [annual, setAnnual] = useState(true)
   const [openFaq, setOpenFaq] = useState<number | null>(0)
@@ -32,17 +33,18 @@ export function PricingAndFaq() {
   return (
     <>
       {/* Pricing */}
-      <section id="pricing" className="scroll-mt-20 border-t bg-canvas py-20 sm:py-24">
+      {part !== "faq" && (
+      <section id="pricing" className={cn("scroll-mt-20 border-t bg-canvas", part === "pricing" ? "py-7 sm:py-9" : "py-20 sm:py-24")}>
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-2xl text-center">
             <span className="inline-flex items-center rounded-full border bg-background px-3 py-1 text-xs font-medium text-brand">
               {t("landing.pricing.eyebrow")}
             </span>
-            <h2 className="mt-4 text-xl leading-tight sm:text-2xl">{t("landing.pricing.title")}</h2>
-            <p className="mt-3 text-base text-muted-foreground">{t("landing.pricing.subtitle")}</p>
+            <h2 className="mt-3 text-xl leading-tight sm:text-2xl">{t("landing.pricing.title")}</h2>
+            <p className="mt-2 text-base text-muted-foreground">{t("landing.pricing.subtitle")}</p>
 
             {/* Billing toggle */}
-            <div className="mt-7 inline-flex items-center gap-1 rounded-xl border bg-background p-1 shadow-xs">
+            <div className="mt-5 inline-flex items-center gap-1 rounded-xl border bg-background p-1 shadow-xs">
               <button
                 type="button"
                 onClick={() => setAnnual(false)}
@@ -74,7 +76,7 @@ export function PricingAndFaq() {
             </div>
           </div>
 
-          <div className="mt-12 grid gap-6 lg:grid-cols-3">
+          <div className={cn("grid gap-5 lg:grid-cols-3", part === "pricing" ? "mt-7" : "mt-12")}>
             {plans.map((plan) => (
               <div
                 key={plan.name}
@@ -126,9 +128,11 @@ export function PricingAndFaq() {
           <p className="mt-6 text-center text-xs text-muted-foreground">{t("landing.pricing.note")}</p>
         </div>
       </section>
+      )}
 
       {/* FAQ Accordion */}
-      <section id="faq" className="scroll-mt-20 border-t bg-background py-20 sm:py-24">
+      {part !== "pricing" && (
+      <section id="faq" className={cn("scroll-mt-20 border-t bg-background", part === "faq" ? "py-7 sm:py-10" : "py-20 sm:py-24")}>
         <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
           <div className="text-center">
             <span className="inline-flex items-center rounded-full border bg-canvas px-3 py-1 text-xs font-medium text-brand">
@@ -178,6 +182,7 @@ export function PricingAndFaq() {
           </div>
         </div>
       </section>
+      )}
     </>
   )
 }

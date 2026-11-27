@@ -15,9 +15,9 @@ import { Field, KeyValue, Spinner, StatusBadge, useErrorMessage } from "@/compon
 import { PaymentCard, PhotoTile } from "@/components/booking/BookingParts"
 import { GuestStepper, HourPicker, ModeToggle, NightRangePicker, defaultStay, useBusy, type StayValue } from "@/components/booking/StayPicker"
 import { api } from "@/lib/api"
-import { dateTime, isoDate, money, shortDate, stayLabel, time } from "@/lib/format"
+import { isoDate, normalizePhone, rememberBookingPhone, useLocalizedFormat, vnPhone } from "@/lib/format"
 import type { ChangeQuote, GuestBooking, Payment, PublicTenant, RefundQuote, Room } from "@/lib/types"
-import { normalizePhone, rememberBookingPhone, vnPhone } from "./BookPage"
+import { GuestPageHeading } from "./GuestVisuals"
 import { usePublic } from "./PublicLayout"
 
 export function useGuestBooking(slug: string, code: string | null, phone: string | null, email: string | null) {
@@ -31,20 +31,21 @@ export function useGuestBooking(slug: string, code: string | null, phone: string
 
 export function BookingSummaryCard({ booking, tenant }: { booking: GuestBooking; tenant: PublicTenant }) {
   const { t } = useTranslation()
+  const { money, shortDate, stayLabel, time } = useLocalizedFormat()
   return (
-    <div className="overflow-hidden rounded-xl border">
-      <div className="flex gap-4 border-b p-4">
-        <PhotoTile url={booking.room.coverUrl} alt={booking.room.name} className="size-20 shrink-0 rounded-lg" />
+    <div className="guest-panel overflow-hidden">
+      <div className="flex items-center gap-4 border-b px-5 py-4">
+        <PhotoTile url={booking.room.coverUrl} alt={booking.room.name} className="size-20 shrink-0 rounded-xl" />
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="font-medium">{booking.room.name}</p>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <p className="font-display text-lg font-bold text-foreground">{booking.room.name}</p>
             <StatusBadge status={booking.status} />
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">{stayLabel(booking.mode, booking.startAt, booking.endAt)}</p>
           <p className="text-sm text-muted-foreground">{t("booking.guestsCount", { count: booking.guests })}</p>
         </div>
       </div>
-      <dl className="p-4">
+      <dl className="px-5 py-4">
         {booking.mode === "Nightly" && (
           <>
             <KeyValue label={t("booking.checkIn")}>{`${shortDate(booking.startAt)}, ${t("public.fromTime", { time: tenant.checkInTime })}`}</KeyValue>
@@ -52,11 +53,11 @@ export function BookingSummaryCard({ booking, tenant }: { booking: GuestBooking;
           </>
         )}
         {booking.mode === "Hourly" && <KeyValue label={t("booking.time")}>{`${time(booking.startAt)}–${time(booking.endAt)}`}</KeyValue>}
-        <div className="my-2 border-t" />
-        <KeyValue label={t("booking.total")}>{money(booking.totalAmount)}</KeyValue>
+        <div className="my-2.5 border-t" />
+        <KeyValue label={t("booking.total")} className="font-medium [&_dt]:text-foreground">{money(booking.totalAmount)}</KeyValue>
         <KeyValue label={t("booking.paid")}>{money(booking.paidAmount)}</KeyValue>
         {booking.refundAmount > 0 && <KeyValue label={t("booking.refunded")}>{money(booking.refundAmount)}</KeyValue>}
-        <KeyValue label={t("booking.balance")} className="font-semibold [&_dt]:text-foreground">
+        <KeyValue label={t("booking.balance")} className="pt-2 text-base font-semibold [&_dd]:text-base [&_dt]:text-foreground">
           {money(booking.balance)}
         </KeyValue>
       </dl>
@@ -75,6 +76,7 @@ function ChangeDialog({ open, onOpenChange, booking, slug, phone, email, tenant,
   rooms: Room[]
 }) {
   const { t } = useTranslation()
+  const { money, time } = useLocalizedFormat()
   const errorMessage = useErrorMessage()
   const qc = useQueryClient()
   const local = (iso: string) => {
@@ -105,15 +107,15 @@ function ChangeDialog({ open, onOpenChange, booking, slug, phone, email, tenant,
   const q = quote.data
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="guest-storefront sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{t("manage.changeTitle")}</DialogTitle>
+          <DialogTitle className="font-display text-xl font-bold">{t("manage.changeTitle")}</DialogTitle>
           <DialogDescription>{t("manage.changeDescription")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <Field label={t("manage.room")}>
             <select
-              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
               value={roomId}
               onChange={(e) => {
                 setRoomId(e.target.value)
@@ -138,7 +140,7 @@ function ChangeDialog({ open, onOpenChange, booking, slug, phone, email, tenant,
           <GuestStepper value={stay.guests} max={room.maxGuests} onChange={(g) => { setStay({ ...stay, guests: g }); quote.reset() }} />
 
           {q && (
-            <div className="rounded-lg bg-muted p-4 text-sm">
+            <div className="rounded-xl bg-muted p-4 text-sm">
               {q.available ? (
                 <>
                   <KeyValue label={t("manage.currentTotal")}>{money(q.oldTotal)}</KeyValue>
@@ -174,6 +176,7 @@ function ChangeDialog({ open, onOpenChange, booking, slug, phone, email, tenant,
 
 function CancelDialog({ open, onOpenChange, booking, slug, phone, email }: { open: boolean; onOpenChange: (o: boolean) => void; booking: GuestBooking; slug: string; phone: string; email: string }) {
   const { t } = useTranslation()
+  const { money } = useLocalizedFormat()
   const errorMessage = useErrorMessage()
   const qc = useQueryClient()
   const [reason, setReason] = useState("")
@@ -192,15 +195,15 @@ function CancelDialog({ open, onOpenChange, booking, slug, phone, email }: { ope
   })
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="guest-storefront">
         <DialogHeader>
-          <DialogTitle>{t("manage.cancelTitle")}</DialogTitle>
+          <DialogTitle className="font-display text-xl font-bold">{t("manage.cancelTitle")}</DialogTitle>
           <DialogDescription>{t("manage.cancelDescription", { code: booking.code })}</DialogDescription>
         </DialogHeader>
         {quote.isLoading ? (
-          <Skeleton className="h-20 w-full" />
+          <Skeleton className="h-20 w-full rounded-xl" />
         ) : quote.data ? (
-          <div className="rounded-lg bg-muted p-4 text-sm">
+          <div className="rounded-xl bg-muted p-4 text-sm">
             <p className="text-sm text-muted-foreground">{t("manage.refundYouGet")}</p>
             <p className="mt-0.5 text-lg font-semibold tabular">{money(quote.data.refundAmount)}</p>
             <p className="mt-2 text-muted-foreground">{quote.data.explanation}</p>
@@ -210,7 +213,7 @@ function CancelDialog({ open, onOpenChange, booking, slug, phone, email }: { ope
           <p className="text-sm text-destructive">{errorMessage(quote.error)}</p>
         ) : null}
         <Field label={t("manage.reason")} optional>
-          <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
+          <Textarea rows={2} className="bg-background" value={reason} onChange={(e) => setReason(e.target.value)} />
         </Field>
         {cancel.error && <p className="text-sm text-destructive">{errorMessage(cancel.error)}</p>}
         <DialogFooter>
@@ -228,6 +231,7 @@ function CancelDialog({ open, onOpenChange, booking, slug, phone, email }: { ope
 
 export function GuestBookingView({ booking, slug, phone, email }: { booking: GuestBooking; slug: string; phone: string; email: string }) {
   const { t } = useTranslation()
+  const { dateTime, money } = useLocalizedFormat()
   const { home } = usePublic()
   const errorMessage = useErrorMessage()
   const qc = useQueryClient()
@@ -242,63 +246,67 @@ export function GuestBookingView({ booking, slug, phone, email }: { booking: Gue
   })
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[1fr_380px]">
-      <div className="min-w-0 space-y-6">
-        {booking.pendingRequest && (
-          <div className="rounded-xl border bg-muted/50 px-4 py-3 text-sm">
-            <p className="font-medium">{booking.pendingRequest.type === "Cancel" ? t("manage.pendingCancel") : t("manage.pendingChange")}</p>
-            <p className="mt-0.5 text-muted-foreground">{t("manage.pendingHint")}</p>
-          </div>
-        )}
-        {open ? (
-          <PaymentCard slug={slug} payment={open} onPaid={() => void qc.invalidateQueries({ queryKey: ["guest-booking", slug, booking.code] })} />
-        ) : booking.balance > 0 && ["Hold", "PendingDeposit", "Confirmed", "CheckedIn"].includes(booking.status) ? (
-          <div className="flex flex-col gap-3 rounded-xl border p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">{["Hold", "PendingDeposit"].includes(booking.status) ? t("payment.kind.Deposit") : t("payment.kind.Remaining")}</p>
-              <p className="text-lg font-semibold tabular">{money(["Hold", "PendingDeposit"].includes(booking.status) ? booking.depositAmount : booking.balance)}</p>
-            </div>
-            <Button onClick={() => pay.mutate()} disabled={pay.isPending}>
-              {pay.isPending && <Spinner />} {t("manage.payNow")}
-            </Button>
-          </div>
-        ) : null}
-        {pay.error && <p className="text-sm text-destructive">{errorMessage(pay.error)}</p>}
+    <div className="space-y-6">
+      <BookingSummaryCard booking={booking} tenant={home.tenant} />
 
-        {modifiable && !booking.pendingRequest && (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => setChangeOpen(true)}>
-              {t("manage.change")}
-            </Button>
-            <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setCancelOpen(true)}>
-              {t("manage.cancel")}
-            </Button>
-          </div>
-        )}
+      {booking.pendingRequest && (
+        <div className="guest-panel px-5 py-4 text-sm">
+          <p className="font-medium text-foreground">{booking.pendingRequest.type === "Cancel" ? t("manage.pendingCancel") : t("manage.pendingChange")}</p>
+          <p className="mt-1 text-muted-foreground">{t("manage.pendingHint")}</p>
+        </div>
+      )}
 
-        {booking.payments.length > 0 && (
-          <section>
-            <h2 className="text-sm font-semibold">{t("manage.payments")}</h2>
-            <ul className="mt-3 divide-y rounded-xl border">
-              {booking.payments.map((p) => (
-                <li key={p.id} className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
-                  <div>
-                    <p>{t(`payment.kind.${p.kind}`)}</p>
-                    <p className="text-xs text-muted-foreground">{dateTime(p.paidAt ?? p.createdAt)}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="tabular">{p.kind === "Refund" ? `−${money(p.amount)}` : money(p.amount)}</span>
-                    <StatusBadge status={p.status} kind="payment" />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-      </div>
-      <aside className="lg:sticky lg:top-24 lg:h-fit">
-        <BookingSummaryCard booking={booking} tenant={home.tenant} />
-      </aside>
+      {open ? (
+        <PaymentCard slug={slug} payment={open} onPaid={() => void qc.invalidateQueries({ queryKey: ["guest-booking", slug, booking.code] })} />
+      ) : booking.balance > 0 && ["Hold", "PendingDeposit", "Confirmed", "CheckedIn"].includes(booking.status) ? (
+        <div className="guest-panel flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm text-muted-foreground">{["Hold", "PendingDeposit"].includes(booking.status) ? t("payment.kind.Deposit") : t("payment.kind.Remaining")}</p>
+            <p className="mt-0.5 text-xl font-semibold tabular text-foreground">{money(["Hold", "PendingDeposit"].includes(booking.status) ? booking.depositAmount : booking.balance)}</p>
+          </div>
+          <Button size="lg" className="rounded-xl px-6" onClick={() => pay.mutate()} disabled={pay.isPending}>
+            {pay.isPending && <Spinner />} {t("manage.payNow")}
+          </Button>
+        </div>
+      ) : null}
+
+      {pay.error && (
+        <p className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive" role="alert">
+          {errorMessage(pay.error)}
+        </p>
+      )}
+
+      {modifiable && !booking.pendingRequest && (
+        <div className="flex flex-wrap gap-3">
+          <Button variant="outline" size="lg" className="rounded-xl" onClick={() => setChangeOpen(true)}>
+            {t("manage.change")}
+          </Button>
+          <Button variant="ghost" size="lg" className="rounded-xl text-destructive hover:text-destructive" onClick={() => setCancelOpen(true)}>
+            {t("manage.cancel")}
+          </Button>
+        </div>
+      )}
+
+      {booking.payments.length > 0 && (
+        <section className="pt-2">
+          <h2 className="font-display text-2xl font-bold">{t("manage.payments")}</h2>
+          <ul className="guest-panel mt-4 divide-y">
+            {booking.payments.map((p) => (
+              <li key={p.id} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
+                <div>
+                  <p className="font-medium text-foreground">{t(`payment.kind.${p.kind}`)}</p>
+                  <p className="text-xs text-muted-foreground">{dateTime(p.paidAt ?? p.createdAt)}</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="font-medium tabular">{p.kind === "Refund" ? `−${money(p.amount)}` : money(p.amount)}</span>
+                  <StatusBadge status={p.status} kind="payment" />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {modifiable && (
         <>
           <ChangeDialog open={changeOpen} onOpenChange={setChangeOpen} booking={booking} slug={slug} phone={phone} email={email} tenant={home.tenant} rooms={home.rooms} />
@@ -337,43 +345,57 @@ export default function ManageBooking() {
   }, [booking.data, lookup, params, setParams])
 
   return (
-    <div className="mx-auto max-w-6xl px-4 pb-10 pt-8 sm:px-6">
-      <h1 className="text-xl">{booking.data ? t("manage.bookingTitle", { code: booking.data.code }) : t("manage.title")}</h1>
-      {!booking.data && <p className="mt-1 text-sm text-muted-foreground">{t("manage.description")}</p>}
+    <div className="mx-auto max-w-3xl px-4 pb-16 pt-10 sm:px-8 sm:pt-14">
+      <GuestPageHeading
+        title={booking.data ? t("manage.bookingTitle", { code: booking.data.code }) : t("manage.title")}
+        description={!booking.data ? t("manage.description") : undefined}
+      />
 
-      {booking.data && lookup ? (
+      {booking.isFetching && !booking.data && lookup ? (
+        <div className="mt-8 space-y-4">
+          <Skeleton className="h-44 w-full rounded-2xl" />
+          <Skeleton className="h-24 w-full rounded-2xl" />
+        </div>
+      ) : booking.data && lookup ? (
         <div className="mt-8">
           <GuestBookingView booking={booking.data} slug={slug} phone={lookup.phone} email={lookup.email} />
-          <Button variant="link" className="mt-8 px-0" onClick={() => { setLookup(null); form.reset({ code: "", phone: "", email: "" }) }}>
-            {t("manage.lookupAnother")}
-          </Button>
-        </div>
-      ) : (
-        <form
-          className="mt-8 max-w-md space-y-4"
-          noValidate
-          onSubmit={form.handleSubmit((v) => setLookup({ code: v.code.trim().toUpperCase(), phone: normalizePhone(v.phone), email: v.email.trim() }))}
-        >
-          <Field label={t("manage.code")} htmlFor="code" error={form.formState.errors.code?.message}>
-            <Input id="code" placeholder="STR-7K3Q9P" className="uppercase" autoComplete="off" {...form.register("code")} />
-          </Field>
-          <Field label={t("book.email")} htmlFor="email" error={form.formState.errors.email?.message}>
-            <Input id="email" type="email" inputMode="email" placeholder="ten@email.com" autoComplete="email" {...form.register("email")} />
-          </Field>
-          <Field label={t("book.phone")} htmlFor="phone" error={form.formState.errors.phone?.message}>
-            <Input id="phone" type="tel" inputMode="tel" placeholder="0912 345 678" {...form.register("phone")} />
-          </Field>
-          {booking.error && (
-            <p className="rounded-md bg-muted px-3 py-2.5 text-sm" role="alert">
-              {errorMessage(booking.error)}
-            </p>
-          )}
-          <Button type="submit" disabled={booking.isFetching}>
-            {booking.isFetching && <Spinner />} {t("manage.find")}
-          </Button>
-        </form>
-      )}
+      <Button
+        variant="link"
+        className="mt-8 px-0 text-muted-foreground hover:text-foreground"
+        onClick={() => {
+          setLookup(null)
+          form.reset({ code: "", phone: "", email: "" })
+        }}
+      >
+        {t("manage.lookupAnother")}
+      </Button>
     </div>
+      ) : (
+    <form
+      className="guest-panel mt-8 space-y-5 p-5 sm:p-8"
+      noValidate
+      onSubmit={form.handleSubmit((v) => setLookup({ code: v.code.trim().toUpperCase(), phone: normalizePhone(v.phone), email: v.email.trim() }))}
+    >
+      <Field label={t("manage.code")} htmlFor="code" error={form.formState.errors.code?.message}>
+        <Input id="code" placeholder="STR-7K3Q9P" className="h-10 bg-background uppercase" autoComplete="off" {...form.register("code")} />
+      </Field>
+      <Field label={t("book.email")} htmlFor="email" error={form.formState.errors.email?.message}>
+        <Input id="email" type="email" inputMode="email" placeholder="ten@email.com" className="h-10 bg-background" autoComplete="email" {...form.register("email")} />
+      </Field>
+      <Field label={t("book.phone")} htmlFor="phone" error={form.formState.errors.phone?.message}>
+        <Input id="phone" type="tel" inputMode="tel" placeholder="0912 345 678" className="h-10 bg-background" {...form.register("phone")} />
+      </Field>
+      {booking.error && (
+        <p className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive" role="alert">
+          {errorMessage(booking.error)}
+        </p>
+      )}
+      <Button type="submit" size="lg" className="h-11 w-full rounded-xl sm:w-auto sm:px-8" disabled={booking.isFetching}>
+        {booking.isFetching && <Spinner />} {t("manage.find")}
+      </Button>
+    </form>
   )
 }
-
+    </div >
+  )
+}

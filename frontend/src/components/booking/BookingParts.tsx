@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { KeyValue, Spinner, StatusBadge } from "@/components/common"
 import { api } from "@/lib/api"
-import { money } from "@/lib/format"
+import { useLocalizedFormat } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { BookingStatus, Payment, Photo, Quote } from "@/lib/types"
 
@@ -22,6 +22,7 @@ export function useDevConfig() {
 
 export function QuoteSummary({ quote, compact }: { quote: Quote; compact?: boolean }) {
   const { t } = useTranslation()
+  const { money } = useLocalizedFormat()
   const unit = quote.mode === "Nightly" ? t("booking.nightsCount", { count: quote.units }) : t("booking.hoursCount", { count: quote.units })
   const grouped = new Map<number, number>()
   for (const l of quote.lines) grouped.set(l.price, (grouped.get(l.price) ?? 0) + 1)
@@ -71,6 +72,7 @@ export function Countdown({ until, onExpire }: { until: string; onExpire?: () =>
  */
 export function PaymentCard({ slug, payment, onPaid, className }: { slug: string; payment: Payment; onPaid?: (bookingStatus: BookingStatus) => void; className?: string }) {
   const { t } = useTranslation()
+  const { money } = useLocalizedFormat()
   const dev = useDevConfig()
   const qc = useQueryClient()
   const status = useQuery({

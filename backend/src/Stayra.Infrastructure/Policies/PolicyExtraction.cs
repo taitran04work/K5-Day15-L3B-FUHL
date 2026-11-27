@@ -40,7 +40,7 @@ public class ExtractedPolicy
 }
 
 /// <summary>Turns policy text into a Draft RefundPolicy (+ suggested FAQs). Uses Claude structured outputs when configured, otherwise a deterministic heuristic.</summary>
-public class PolicyExtractionService(IAppDbContext db, IConfiguration config, AuditService audit, ILogger<PolicyExtractionService> log)
+public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, AuditService audit, ILogger<PolicyExtractionService> log)
 {
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { NumberHandling = JsonNumberHandling.AllowReadingFromString };
 
@@ -97,14 +97,16 @@ public class PolicyExtractionService(IAppDbContext db, IConfiguration config, Au
     Never invent rules that are not in the text.
     """;
 
-    public bool AiEnabled => !string.IsNullOrWhiteSpace(config["Anthropic:ApiKey"]);
-
     public async Task<RefundPolicy> ExtractAndSaveDraftAsync(PolicyDocument doc, IReadOnlyList<PageText> pages, CancellationToken ct = default)
     {
+        // the homestay's own key + model; no key -> the heuristic extractor
+        var tenant = await db.Tenants.IgnoreQueryFilters().FirstAsync(t => t.Id == doc.TenantId, ct);
+        var client = ai.Client(tenant);
+        var aiUsed = client is not null;
         ExtractedPolicy extracted;
-        if (AiEnabled)
+        if (client is not null)
         {
-            try { extracted = await ExtractWithClaudeAsync(pages, ct); }
+            try { extracted = await ExtractWithClaudeAsync(client, ai.Model(tenant), pages, ct); }
             catch (Exception ex)
             {
                 log.LogWarning(ex, "Claude extraction failed for {Doc}; using heuristic extractor", doc.Id);
@@ -143,19 +145,18 @@ public class PolicyExtractionService(IAppDbContext db, IConfiguration config, Au
                 SourceDocumentId = doc.Id, SortOrder = ++order,
             });
         }
-        audit.Log(doc.TenantId, Actors.System, "policy.extracted", nameof(RefundPolicy), policy.Id, new { doc.FileName, Rules = rules.Count, Ai = AiEnabled });
+        audit.Log(doc.TenantId, Actors.System, "policy.extracted", nameof(RefundPolicy), policy.Id, new { doc.FileName, Rules = rules.Count, Ai = aiUsed });
         await db.SaveChangesAsync(ct);
         return policy;
     }
 
-    private async Task<ExtractedPolicy> ExtractWithClaudeAsync(IReadOnlyList<PageText> pages, CancellationToken ct)
+    private async Task<ExtractedPolicy> ExtractWithClaudeAsync(AnthropicClient client, string model, IReadOnlyList<PageText> pages, CancellationToken ct)
     {
-        var client = new AnthropicClient { ApiKey = config["Anthropic:ApiKey"]! };
         var schema = JsonDocument.Parse(SchemaJson).RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
         var text = string.Join("\n\n", pages.Select(p => $"[Page {p.Page}]\n{p.Text}"));
         var resp = await client.Messages.Create(new MessageCreateParams
         {
-            Model = string.IsNullOrWhiteSpace(config["Anthropic:Model"]) ? "claude-haiku-5-5" : config["Anthropic:Model"]!,
+            Model = model,
             MaxTokens = 16000,
             System = Instructions,
             Messages = [new UserMessageParam { Content = $"<policy_document>\n{text}\n</policy_document>" }],

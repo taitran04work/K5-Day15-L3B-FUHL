@@ -21,6 +21,11 @@ public class Tenant : Entity
     public string? Email { get; set; }
     public string? LogoUrl { get; set; }
     public string? CoverImageUrl { get; set; }
+    // Background photos for the guest home page slides (the hero uses CoverImageUrl). Empty = auto from room photos.
+    public string? BgAboutUrl { get; set; }
+    public string? BgRoomsUrl { get; set; }
+    public string? BgPoliciesUrl { get; set; }
+    public string? BgContactUrl { get; set; }
     public string AccentColor { get; set; } = "#1F5F4A";
     public double? Latitude { get; set; }
     public double? Longitude { get; set; }
@@ -58,6 +63,12 @@ public class Tenant : Entity
     public string? MomoPartnerCode { get; set; }
     public string? MomoAccessKeyEnc { get; set; }
     public string? MomoSecretKeyEnc { get; set; }
+
+    // AI concierge: the homestay brings its own Anthropic key (encrypted at rest) and picks a model
+    public string? AnthropicApiKeyEnc { get; set; }
+    /// <summary>Last 4 characters of the key, so the owner can recognise it without us ever returning it.</summary>
+    public string? AnthropicKeyHint { get; set; }
+    public string? AiModel { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

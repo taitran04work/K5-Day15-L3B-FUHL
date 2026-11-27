@@ -1,10 +1,14 @@
-import { lazy, Suspense, useEffect, type ReactNode } from "react"
-import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation } from "react-router"
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react"
+import { createBrowserRouter, Navigate, RouterProvider, useLocation, useOutlet } from "react-router"
+import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { Toaster } from "@/components/ui/sonner"
+import { SystemTheme, SystemThemeScope } from "@/components/layout/SystemTheme"
 import { AuthProvider, useAuth } from "@/lib/auth"
-import { AdminShell, AppShell } from "@/components/layout/AppShell"
 import { Spinner } from "@/components/common"
+import { Logo } from "@/components/Logo"
+
+const AppShell = lazy(() => import("@/components/layout/AppShell").then((m) => ({ default: m.AppShell })))
+const AdminShell = lazy(() => import("@/components/layout/AppShell").then((m) => ({ default: m.AdminShell })))
 
 const Landing = lazy(() => import("@/pages/Landing"))
 const Login = lazy(() => import("@/pages/auth/Login"))
@@ -13,6 +17,7 @@ const ResetPassword = lazy(() => import("@/pages/auth/ResetPassword"))
 
 const PublicLayout = lazy(() => import("@/pages/public/PublicLayout"))
 const TenantHome = lazy(() => import("@/pages/public/TenantHome"))
+const PublicRoomsPage = lazy(() => import("@/pages/public/RoomsPage"))
 const RoomPage = lazy(() => import("@/pages/public/RoomPage"))
 const BookPage = lazy(() => import("@/pages/public/BookPage"))
 const ConfirmationPage = lazy(() => import("@/pages/public/ConfirmationPage"))
@@ -24,6 +29,7 @@ const CalendarPage = lazy(() => import("@/pages/app/CalendarPage"))
 const Bookings = lazy(() => import("@/pages/app/Bookings"))
 const Inbox = lazy(() => import("@/pages/app/Inbox"))
 const Rooms = lazy(() => import("@/pages/app/Rooms"))
+const RoomDetail = lazy(() => import("@/pages/app/RoomDetail"))
 const Pricing = lazy(() => import("@/pages/app/Pricing"))
 const Policies = lazy(() => import("@/pages/app/Policies"))
 const Payments = lazy(() => import("@/pages/app/Payments"))
@@ -53,8 +59,40 @@ function RequireRole({ roles, children }: { roles: string[]; children: ReactNode
   return <>{children}</>
 }
 
+const CURTAIN_EASE = [0.76, 0, 0.24, 1] as const
+
+function usesSystemTheme(pathname: string) {
+  const path = pathname.toLowerCase().replace(/\/+$/, "")
+  return path !== "" && !path.startsWith("/h/") && path !== "/pay/return" && path !== "/dev/zalo-simulator"
+}
+
+/** Brand curtain that sweeps over the screen while one route group swaps for another. */
+function RouteCurtain({ system }: { system: boolean }) {
+  return (
+    <motion.div
+      aria-hidden
+      className="route-curtain pointer-events-none fixed inset-0 z-[100] flex items-center justify-center"
+      data-system={system || undefined}
+      initial={{ y: "100%" }}
+      animate={{ y: ["100%", "0%", "0%", "-100%"] }}
+      transition={{ duration: 0.9, times: [0, 0.32, 0.58, 1], ease: CURTAIN_EASE }}
+    >
+      <motion.span
+        className="flex items-center gap-3 text-[#f3ecdf]"
+        initial={{ opacity: 0, y: 14 }}
+        animate={{ opacity: [0, 1, 1, 0], y: [14, 0, 0, -14] }}
+        transition={{ duration: 0.9, times: [0.16, 0.34, 0.58, 0.8] }}
+      >
+        <Logo tone="light" className={system ? "h-20" : "h-14"} />
+      </motion.span>
+    </motion.div>
+  )
+}
+
 function RouteTransitionShell() {
   const { pathname, hash } = useLocation()
+  const outlet = useOutlet()
+  const reduce = useReducedMotion()
 
   useEffect(() => {
     if (!hash) {
@@ -62,29 +100,50 @@ function RouteTransitionShell() {
     }
   }, [pathname, hash])
 
-  const groupKey = pathname.startsWith("/app")
-    ? "app"
-    : pathname.startsWith("/admin")
-      ? "admin"
-      : pathname.startsWith("/h/")
-        ? pathname.split("/").slice(0, 3).join("/")
-        : pathname
+  const managementSection = /^\/(app|admin)(?:\/|$)/i.exec(pathname)?.[1]?.toLowerCase()
+  const tenantBase = /^(\/h\/[^/]+)/i.exec(pathname)?.[1]?.toLowerCase()
+  const authRoute = /^\/(login|forgot-password|reset-password)\/?$/i.test(pathname)
+  const groupKey = managementSection ?? tenantBase ?? (authRoute ? "auth" : pathname)
+  const system = usesSystemTheme(pathname)
+
+  // show the curtain only for real cross-group navigations, not within one property's storefront
+  const [prevKey, setPrevKey] = useState(groupKey)
+  const [navigated, setNavigated] = useState(false)
+  if (prevKey !== groupKey) {
+    setPrevKey(groupKey)
+    setNavigated(true)
+  }
 
   return (
-    <div key={groupKey} className="animate-page-enter">
-      <Outlet />
-    </div>
+    <>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={groupKey}
+          initial={reduce ? false : { opacity: 0 }}
+          animate={
+            reduce
+              ? { opacity: 1, transition: { duration: 0 } }
+              : { opacity: 1, transition: { duration: 0.32, delay: navigated ? 0.16 : 0, ease: [0.22, 1, 0.36, 1] } }
+          }
+          exit={reduce ? { opacity: 1, transition: { duration: 0 } } : { opacity: 0, transition: { duration: 0.22, ease: [0.4, 0, 1, 1] } }}
+        >
+          <SystemThemeScope enabled={system} />
+          <Suspense fallback={<FullPageSpinner />}>{outlet}</Suspense>
+        </motion.div>
+      </AnimatePresence>
+      {!reduce && navigated && <RouteCurtain key={groupKey} system={system} />}
+    </>
   )
 }
 
 function Root() {
+  const { pathname } = useLocation()
   return (
     <AuthProvider>
       <TooltipProvider delayDuration={300}>
-        <Suspense fallback={<FullPageSpinner />}>
+        <SystemTheme enabled={usesSystemTheme(pathname)}>
           <RouteTransitionShell />
-        </Suspense>
-        <Toaster />
+        </SystemTheme>
       </TooltipProvider>
     </AuthProvider>
   )
@@ -105,6 +164,7 @@ const router = createBrowserRouter([
         element: <PublicLayout />,
         children: [
           { index: true, element: <TenantHome /> },
+          { path: "rooms", element: <PublicRoomsPage /> },
           { path: "rooms/:roomId", element: <RoomPage /> },
           { path: "book", element: <BookPage /> },
           { path: "booking/:code", element: <ConfirmationPage /> },
@@ -124,6 +184,8 @@ const router = createBrowserRouter([
           { path: "bookings", element: <Suspense fallback={<FullPageSpinner />}><Bookings /></Suspense> },
           { path: "inbox", element: <Suspense fallback={<FullPageSpinner />}><Inbox /></Suspense> },
           { path: "rooms", element: <Suspense fallback={<FullPageSpinner />}><Rooms /></Suspense> },
+          { path: "rooms/new", element: <Suspense fallback={<FullPageSpinner />}><RoomDetail /></Suspense> },
+          { path: "rooms/:roomId", element: <Suspense fallback={<FullPageSpinner />}><RoomDetail /></Suspense> },
           { path: "pricing", element: <Suspense fallback={<FullPageSpinner />}><Pricing /></Suspense> },
           { path: "policies", element: <Suspense fallback={<FullPageSpinner />}><Policies /></Suspense> },
           { path: "payments", element: <Suspense fallback={<FullPageSpinner />}><Payments /></Suspense> },
