@@ -1,23 +1,16 @@
-# Data card — dữ liệu bản chạy thử dùng
+# Data card — đặt phòng homestay qua chatbot
 
-> Điền ở guide bước 2.4 (bản đầu ở CP2, đủ ở CP3). Ôn lại: ngày 6 · lab ngày 6. Chấm ở rubric R4.
-> Một trang. Mỗi dataset một mục. Dữ liệu chạy thử (bài mẫu, thông báo mẫu, đoạn transcript…) để trong thư mục `data/` này.
-> Không commit nguyên tài liệu khoá, dữ liệu cá nhân thật hay nguyên file data BTC cấp — chỉ đoạn trích ngắn, bản viết lại, hoặc số đã tổng hợp.
+## Dataset 1 · Dữ liệu demo Stayra
 
-## Dataset 1 · [tên]
-
-| | |
+| Mục | Mô tả |
 |---|---|
-| Dùng để làm gì | nguồn cho công cụ `…` · bộ câu thử · đào bằng chứng |
-| Từ đâu | data BTC cấp (`…` trong repo đề) · tài liệu khoá (trích / viết lại) · nhóm tự viết · sinh có seed |
-| Xử lý những bước gì | lọc __ · làm sạch __ · ẩn danh __ · chia __ (script: `…`) |
-| Số dòng / số đoạn | __ |
-| Phiên bản / ngày lấy | __ |
-| Nhãn | thật · `synthetic` |
-| Giới hạn | thiếu gì, lệch về phía nào |
+| Dùng để làm gì | Kiểm tra đề xuất phòng, tra lịch, báo giá, tiền cọc và giữ phòng qua chatbot. |
+| Nguồn và phiên bản | Seed trong repo. Pine Hill là cơ sở demo chính, Sea Breeze là cơ sở demo thứ hai, có cấu hình khác. [Mã tạo seed](../backend/src/Stayra.Infrastructure/Persistence/DatabaseSetup.cs) |
+| Quy mô | 2 homestay và 10 phòng trong seed, gồm 6 phòng Pine Hill và 4 phòng Sea Breeze. |
+| Xử lý | Seed nạp phòng, sức chứa, quy tắc giá và đặt phòng mẫu vào Postgres. Chatbot tra theo cơ sở hiện tại, ngày ở và số khách. Giá và tiền cọc được tính tại thời điểm tra. |
+| Nhãn | `synthetic`. Tên phòng, lịch mẫu và giao dịch demo phục vụ thử kỹ thuật. |
+| Giới hạn | Lịch phụ thuộc ngày chạy và các lượt giữ phòng được tạo trong demo. Dữ liệu người dùng thật chưa được thu trong repo. |
 
-**Data `synthetic` (nhóm tự sinh):** ghi cách sinh (prompt / script), seed, người kiểm, số dòng đã kiểm tay. Data tự dựng **không phải bằng chứng pain**.
+## Dataset 2 · Kịch bản thử chat đặt phòng
 
-## Dataset 2 · [tên]
-
-…
+Có 9 kịch bản viết tay, từ S01 đến S09, ở [spec.md](../spec.md). Chúng bao phủ phòng trống, thiếu thông tin, sửa yêu cầu, chuyển chủ nhà, phòng vừa hết, giữ phòng và trạng thái chờ đặt cọc. Chạy với thông tin liên hệ giả lập và ghi kết quả theo từng bước. Câu thử từ khách thật sẽ có nguồn và được ẩn danh trước khi nhập vào bộ đánh giá.
