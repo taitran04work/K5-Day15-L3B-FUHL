@@ -91,7 +91,7 @@ services:
     ports:
       - "27800:27800"
     volumes:
-      - deplao_data:/root/.config/deplao
+      - deplao_data:/root/.config/Deplao
 
   # Optional: expose the API publicly so MoMo IPN and Zalo webhooks can reach it.
   #   docker compose --profile tunnel up
