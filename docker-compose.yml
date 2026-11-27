@@ -55,6 +55,7 @@ services:
       Smtp__FromName: ${SMTP_FROM_NAME:-Stayra}
       Smtp__WebBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
       Deplao__DefaultBaseUrl: ${DEPLAO_BASE_URL:-http://deplao:27800/api/v1}
+      Deplao__WebhookBaseUrl: ${DEPLAO_WEBHOOK_BASE_URL:-http://api:8080}
       Deplao__WebPassword: ${DEPLAO_WEB_PASSWORD:-stayra-deplao-local-1234}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -86,6 +87,7 @@ services:
       DEPLAO_WEB_PORT: 27800
       DEPLAO_WEB_HOST: 0.0.0.0
       DEPLAO_WEB_SECURE: 0
+      DEPLAO_ALLOW_PRIVATE_URLS: 1
     ports:
       - "27800:27800"
     volumes:

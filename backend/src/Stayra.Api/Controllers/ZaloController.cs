@@ -537,7 +537,7 @@ public class DeplaoChannelsController(
 
     private string WebhookUrlFor(Tenant t)
     {
-        var apiBase = (config["App:PublicApiUrl"] ?? momo.Value.IpnBaseUrl).TrimEnd('/');
+        var apiBase = (config["Deplao:WebhookBaseUrl"] ?? config["App:PublicApiUrl"] ?? momo.Value.IpnBaseUrl).TrimEnd('/');
         return $"{apiBase}/api/channels/deplao/{t.Slug}/webhook";
     }
 

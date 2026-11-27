@@ -90,6 +90,7 @@ export function getApiSettingNumber(key: ApiSettingKey): number {
 }
 
 export function getApiSettingBool(key: ApiSettingKey): boolean {
+    if (key === 'api_allow_private_urls' && process.env.DEPLAO_ALLOW_PRIVATE_URLS === '1') return true;
     return getApiSetting(key) === '1';
 }
 
