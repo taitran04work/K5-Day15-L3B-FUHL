@@ -187,4 +187,7 @@ public class SignalRNotifier(IHubContext<InboxHub> inbox, IHubContext<WidgetHub>
 
     public Task Typing(Guid conversationId, bool typing) =>
         widget.Clients.Group($"conv:{conversationId}").SendAsync("typing", typing);
+
+    public Task ConversationStatusChanged(Guid conversationId, string status) =>
+        widget.Clients.Group($"conv:{conversationId}").SendAsync("conversationStatus", status);
 }

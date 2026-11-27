@@ -30,9 +30,11 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
         public string? Name { get; set; }
         public string? Phone { get; set; }
         public string? Email { get; set; }
+        public string? Note { get; set; }
         public bool AskedEmail { get; set; }
         public string? Code { get; set; }
         public string? CodePhone { get; set; }
+        public string? CodeEmail { get; set; }
         public List<Guid> Options { get; set; } = [];
     }
 
@@ -72,11 +74,18 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
                 "Mình đã báo chủ nhà, chủ nhà sẽ trả lời bạn ngay trong cuộc trò chuyện này nhé.");
         }
 
+        // Reject prompt injection / 0-VND spoofing without creating noisy inbox handoffs.
+        if (InjectionRx().IsMatch(plain))
+        {
+            return L("Sorry, I can't follow that request. I can only check availability, quote standard prices, or look up a booking with your code and phone number.",
+                "Xin lỗi, mình không thể thực hiện yêu cầu này. Mình chỉ hỗ trợ kiểm tra phòng trống, báo giá theo bảng giá niêm yết và tra cứu đặt phòng khi có đủ mã đơn cùng số điện thoại.");
+        }
+
         // ---- Pending confirmations ----
         if (s.Step == "confirm")
         {
-            if (Yes(plain)) return await CreateBooking(s, ct);
-            if (No(plain))
+            if (IsYes(text, plain)) return await CreateBooking(s, ct);
+            if (IsNo(text, plain))
             {
                 Reset(s);
                 return L("No problem, nothing was booked. Would you like to try other dates or another room?",
@@ -85,7 +94,7 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
         }
         if (s.Step == "confirm_cancel")
         {
-            if (Yes(plain))
+            if (IsYes(text, plain))
             {
                 var r = await Call("request_cancellation", new { code = s.Code, phone = s.CodePhone, reason = "Requested via chat" }, ct);
                 s.Step = null;
@@ -102,52 +111,88 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
                     : L($"Done — booking {s.Code} is cancelled. Is there anything else I can help with?",
                         $"Xong rồi — đặt phòng {s.Code} đã được hủy. Bạn cần hỗ trợ gì thêm không?");
             }
-            if (No(plain))
+            if (IsNo(text, plain))
             {
                 s.Step = null;
                 return L("Okay, your booking stays as it is.", "Được rồi, đặt phòng của bạn vẫn giữ nguyên nhé.");
             }
         }
 
-        // ---- Existing bookings (code + phone) ----
+        // ---- Existing bookings (code + phone + email) ----
         var code = CodeRx().Match(text.ToUpperInvariant()) is { Success: true } cm ? cm.Value.Replace(" ", "") : null;
         var phone = ExtractPhone(text);
-        var intent = CancelRx().IsMatch(plain) ? "cancel" : PayRx().IsMatch(plain) ? "pay" : CheckoutRx().IsMatch(plain) ? "checkout" : null;
+        var emailMatch = EmailRx().Match(text);
+        var emailVal = emailMatch.Success ? emailMatch.Value.Trim() : null;
+        var intent = CancelRx().IsMatch(plain) ? "cancel"
+            : ChangeRx().IsMatch(plain) ? "change"
+            : PayRx().IsMatch(plain) ? "pay"
+            : CheckoutRx().IsMatch(plain) ? "checkout"
+            : null;
         if (code != null)
         {
             s.Intent = intent ?? (s.Flow == "lookup" ? s.Intent : null) ?? "view";
+            if (!string.Equals(s.Code, code, StringComparison.OrdinalIgnoreCase))
+            {
+                s.CodePhone = null;
+                s.CodeEmail = null;
+            }
             s.Code = code;
             s.Flow = "lookup";
             if (phone != null) s.CodePhone = phone;
-            else if (s.CodePhone == null)
+            if (emailVal != null) s.CodeEmail = emailVal;
+            if (s.CodePhone == null)
             {
                 s.Step = "lookup_phone";
-                return L($"Thanks! To protect your booking, what phone number did you use for {code}?",
-                    $"Cảm ơn bạn! Để bảo mật, bạn cho mình số điện thoại đã dùng khi đặt {code} nhé?");
+                return L($"Thanks! To verify your booking {code}, please provide the phone number and email you used when booking.",
+                    $"Cảm ơn bạn! Để xác minh đặt phòng {code}, bạn vui lòng nhập số điện thoại và email đã dùng khi đặt nhé.");
+            }
+            if (s.CodeEmail == null)
+            {
+                s.Step = "lookup_email";
+                return L($"Thanks! Please also provide the email address you used for booking {code}.",
+                    $"Cảm ơn bạn! Bạn vui lòng nhập thêm email đã dùng khi đặt phòng {code} nhé.");
             }
             return await BookingAction(s, ct);
         }
-        if (s.Step == "lookup_phone" && phone != null)
+        if (s.Step is "lookup_phone" or "lookup_email")
         {
-            s.CodePhone = phone;
-            return await BookingAction(s, ct);
+            if (phone != null) s.CodePhone = phone;
+            if (emailVal != null) s.CodeEmail = emailVal;
+            if (s.CodePhone != null && s.CodeEmail != null)
+                return await BookingAction(s, ct);
+            if (s.Step == "lookup_phone" && s.CodePhone != null && s.CodeEmail == null)
+            {
+                s.Step = "lookup_email";
+                return L($"Got your phone number. Now please provide the email address you used for booking {s.Code}.",
+                    $"Mình đã nhận số điện thoại. Bạn nhập thêm email đã dùng khi đặt phòng {s.Code} nhé.");
+            }
+            if (s.Step == "lookup_email" && s.CodeEmail != null && s.CodePhone == null)
+            {
+                s.Step = "lookup_phone";
+                return L($"Got your email. Now please provide the phone number you used for booking {s.Code}.",
+                    $"Mình đã nhận email. Bạn nhập thêm số điện thoại đã dùng khi đặt phòng {s.Code} nhé.");
+            }
+            if (s.Step == "lookup_phone" && text.Count(char.IsDigit) >= 6 && !BookRx().IsMatch(plain) && ParseDates(plain, today).Count == 0)
+                return L("That doesn't look like a Vietnamese mobile number. Please send it like 0912 345 678.",
+                    "Số điện thoại chưa đúng định dạng. Bạn gửi lại giúp mình dạng 0912 345 678 nhé.");
+            if (s.Step == "lookup_email" && text.Contains('@'))
+                return L("That doesn't look like a valid email address. Please send it like name@email.com.",
+                    "Email chưa đúng định dạng. Bạn gửi lại giúp mình dạng ten@email.com nhé.");
+            s.Step = null;
+            s.Flow = null; // the guest moved on to something else
         }
-        if (s.Step == "lookup_phone" && text.Count(char.IsDigit) >= 6 && !BookRx().IsMatch(plain) && ParseDates(plain, today).Count == 0)
-            return L("That doesn't look like a Vietnamese mobile number. Please send it like 0912 345 678.",
-                "Số điện thoại chưa đúng định dạng. Bạn gửi lại giúp mình dạng 0912 345 678 nhé.");
-        if (s.Step == "lookup_phone") { s.Step = null; s.Flow = null; } // the guest moved on to something else
-        if (intent != null && s.Code != null && s.CodePhone != null && s.Flow != "book")
+        if (intent != null && s.Code != null && s.CodePhone != null && s.CodeEmail != null && s.Flow != "book")
         {
             s.Intent = intent;
             return await BookingAction(s, ct);
         }
-        if (intent is "cancel" or "pay" or "checkout" && s.Flow != "book")
+        if (intent is "cancel" or "change" or "pay" or "checkout" && s.Flow != "book")
         {
             s.Flow = "lookup";
             s.Intent = intent;
             s.Step = null;
-            return L("Sure. Please send me your booking code (like STR-7K3Q9P) and the phone number you booked with.",
-                "Được ạ. Bạn gửi giúp mình mã đặt phòng (ví dụ STR-7K3Q9P) và số điện thoại đã dùng khi đặt nhé.");
+            return L("Sure. Please send me your booking code (like STR-7K3Q9P), your email, and the phone number you booked with.",
+                "Được ạ. Bạn gửi giúp mình mã đặt phòng (ví dụ STR-7K3Q9P), email và số điện thoại đã dùng khi đặt nhé.");
         }
 
         // ---- Booking flow ----
@@ -159,12 +204,15 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
         var times = ParseTimes(plain);
         var hoursCount = HoursRx().Match(plain) is { Success: true } hm ? int.Parse(hm.Groups[1].Value) : (int?)null;
         var roomMatch = MatchRoom(rooms, plain, s);
-        var bookIntent = BookRx().IsMatch(plain) || dates.Count > 0 || s.Flow == "book";
+        var structuredConfirm = Regex.IsMatch(plain, @"^(toi xac nhan dat phong|i confirm booking)\b");
+        var isPolicyInterruption = s.Step == "confirm" && text.Contains('?') && dates.Count == 0 && roomMatch == null && guests == null;
+        var bookIntent = !isPolicyInterruption && (BookRx().IsMatch(plain) || dates.Count > 0 || s.Flow == "book");
 
         if (bookIntent)
         {
             if (s.Flow != "book") { Reset(s); s.Flow = "book"; }
             if (hourly || times.Count > 0) s.Mode = "hourly";
+            else if (Regex.IsMatch(plain, @"\b(theo dem|nightly)\b")) s.Mode = "nightly";
             if (roomMatch != null) s.RoomId = roomMatch.Id;
             if (guests is > 0 and < 30) s.Guests = guests;
             else if (s.Step == "guests" && int.TryParse(BareNumberRx().Match(plain).Value, out var bare) && bare is > 0 and < 30) s.Guests = bare;
@@ -203,15 +251,27 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
             else if (nights != null && s.Start != null && s.Mode == "nightly")
                 s.End = DateOnly.Parse(s.Start).AddDays(nights.Value).ToString("yyyy-MM-dd");
 
+            ExtractStructuredFields(text, s);
+
             // Free-text answers for the current question.
-            if (s.Step == "name" && roomMatch == null && dates.Count == 0 && !Yes(plain) && text.Trim().Length is >= 2 and <= 80 && !text.Any(char.IsDigit))
+            if (s.Step == "name" && s.Name == null && roomMatch == null && dates.Count == 0 && !IsYes(text, plain) && !IsNo(text, plain)
+                && !text.Contains('?') && !RoomsRx().IsMatch(plain) && !CancelRx().IsMatch(plain) && !GreetingRx().IsMatch(plain)
+                && text.Trim().Length is >= 2 and <= 80 && !text.Any(char.IsDigit))
                 s.Name = CultureInfo.CurrentCulture.TextInfo.ToTitleCase(text.Trim().ToLower());
             if (phone != null) s.Phone = phone;
             else if (s.Step == "phone" && text.Any(char.IsDigit))
                 return L("That doesn't look like a Vietnamese mobile number. Please send it like 0912 345 678.",
                     "Số điện thoại chưa đúng định dạng. Bạn gửi lại giúp mình dạng 0912 345 678 nhé.");
-            if (EmailRx().Match(text) is { Success: true } em) { s.Email = em.Value; s.AskedEmail = true; }
-            else if (s.Step == "email") s.AskedEmail = true; // "no"/"skip" → no email
+            if (emailMatch.Success) { s.Email = emailMatch.Value.Trim(); s.AskedEmail = true; }
+            else if (s.Step == "email")
+                return L("Please enter a valid email address (for example name@email.com) so we can send your confirmation and verify future lookups.",
+                    "Email chưa đúng định dạng. Bạn gửi giúp mình email hợp lệ (ví dụ ten@email.com) để nhận xác nhận và xác minh khi tra cứu/đổi phòng nhé.");
+
+            if (structuredConfirm && s.RoomId != null && s.Start != null && s.End != null && s.Guests != null && s.Name != null && s.Phone != null && s.Email != null)
+            {
+                s.AskedEmail = true;
+                return await CreateBooking(s, ct);
+            }
 
             return await NextBookingStep(s, rooms, ct);
         }
@@ -308,11 +368,11 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
             s.Step = "phone";
             return L("Thanks! What's your phone number? We'll use it to find your booking later.", "Cảm ơn bạn! Bạn cho mình số điện thoại để tiện liên hệ và tra cứu đặt phòng nhé.");
         }
-        if (!s.AskedEmail)
+        if (s.Email == null)
         {
             s.Step = "email";
-            s.AskedEmail = true;
-            return L("Would you like a confirmation by email? Send your email, or reply \"skip\".", "Bạn có muốn nhận xác nhận qua email không? Gửi email của bạn, hoặc trả lời \"bỏ qua\".");
+            return L("What's your email address? We'll send your confirmation and use it to verify future lookups or room changes.",
+                "Bạn cho mình xin email để gửi xác nhận đặt phòng và dùng xác minh khi tra cứu hoặc đổi phòng nhé.");
         }
 
         var q = await Call("quote_price", new { roomId = s.RoomId, mode = s.Mode, start = s.Start, end = s.End, guests = s.Guests }, ct);
@@ -344,7 +404,7 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
         var r = await Call("create_booking", new
         {
             roomId = s.RoomId, mode = s.Mode, start = s.Start, end = s.End, guests = s.Guests,
-            guestName = s.Name, guestPhone = s.Phone, guestEmail = s.Email,
+            guestName = s.Name, guestPhone = s.Phone, guestEmail = s.Email, note = s.Note,
         }, ct);
         if (r.IsError)
         {
@@ -356,10 +416,16 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
         var d = JsonDocument.Parse(r.Json).RootElement;
         var code = d.GetProperty("code").GetString();
         var phone = s.Phone;
+        var email = s.Email;
         Reset(s);
         s.Code = code;
         s.CodePhone = phone;
-        var holdUntil = d.TryGetProperty("holdExpiresAtLocal", out var h) ? h.GetString() : null;
+        s.CodeEmail = email;
+        var status = d.TryGetProperty("status", out var st) ? st.GetString() : null;
+        var holdUntil = d.TryGetProperty("holdExpiresAtLocal", out var h) && h.ValueKind == JsonValueKind.String ? h.GetString() : null;
+        if (status == "Confirmed" || string.IsNullOrEmpty(holdUntil))
+            return L($"Booking {code} is confirmed! Let me know if you need anything else.",
+                $"Đặt phòng {code} đã được xác nhận! Bạn cần hỗ trợ gì thêm cứ nhắn mình nhé.");
         return L($"Your booking {code} is on hold until {holdUntil}. Pay the deposit of {Vnd(d.GetProperty("deposit").GetDecimal())} with MoMo below to confirm it.",
             $"Đặt phòng {code} đang được giữ đến {holdUntil}. Bạn thanh toán cọc {Vnd(d.GetProperty("deposit").GetDecimal())} qua MoMo bên dưới để xác nhận nhé.");
     }
@@ -367,7 +433,7 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
     private async Task<string> BookingAction(BotState s, CancellationToken ct)
     {
         s.Step = null;
-        var id = new { code = s.Code, phone = s.CodePhone };
+        var id = new { code = s.Code, phone = s.CodePhone, email = s.CodeEmail };
         switch (s.Intent)
         {
             case "cancel":
@@ -379,6 +445,13 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
                     var refund = d.GetProperty("refundAmount").GetDecimal();
                     return L($"{d.GetProperty("explanation").GetString()} Refund: {Vnd(refund)}. Do you want to cancel booking {s.Code}?",
                         $"{d.GetProperty("explanation").GetString()} Số tiền hoàn: {Vnd(refund)}. Bạn có chắc muốn hủy đặt phòng {s.Code} không?");
+                }
+            case "change":
+                {
+                    var r = await Call("find_booking", id, ct);
+                    if (r.IsError) { ForgetIdentityOnNotFound(s, r); return Error(r); }
+                    return L($"Booking {s.Code} verified. Please visit Manage booking or tell me the new room and dates you'd like to change to.",
+                        $"Đã xác minh đặt phòng {s.Code}. Bạn có thể vào trang Quản lý đặt phòng hoặc nhắn phòng/ngày mới bạn muốn đổi nhé.");
                 }
             case "pay":
                 {
@@ -426,7 +499,7 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
 
     private static void ForgetIdentityOnNotFound(BotState s, ToolResult r)
     {
-        if (r.Json.Contains("booking_not_found")) { s.Code = null; s.CodePhone = null; s.Flow = null; }
+        if (r.Json.Contains("booking_not_found")) { s.Code = null; s.CodePhone = null; s.CodeEmail = null; s.Flow = null; }
     }
 
     private async Task<ToolResult> Call(string name, object input, CancellationToken ct)
@@ -453,7 +526,7 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
             var code = d.TryGetProperty("error", out var c) ? c.GetString() : null;
             return code switch
             {
-                "booking_not_found" => "Mình không tìm thấy đặt phòng với mã và số điện thoại này. Bạn kiểm tra lại giúp mình nhé.",
+                "booking_not_found" => "Mình không tìm thấy đặt phòng khớp với mã đơn, email và số điện thoại này. Bạn kiểm tra lại giúp mình nhé.",
                 "room_unavailable" => "Phòng này vừa có người đặt cho thời gian đó.",
                 "too_many_guests" => "Phòng này không đủ chỗ cho số khách đó.",
                 "min_hours" => "Thời gian ở theo giờ ngắn hơn mức tối thiểu của phòng.",
@@ -472,7 +545,24 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
     private static void Reset(BotState s)
     {
         s.Flow = null; s.Step = null; s.Intent = null; s.RoomId = null; s.Mode = "nightly"; s.Start = null; s.End = null; s.Guests = null;
-        s.Name = null; s.Phone = null; s.Email = null; s.AskedEmail = false; s.Options = [];
+        s.Name = null; s.Phone = null; s.Email = null; s.Note = null; s.AskedEmail = false; s.Options = [];
+    }
+
+    private static void ExtractStructuredFields(string text, BotState s)
+    {
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.Trim().TrimStart('-', '*').Trim();
+            var idx = line.IndexOf(':');
+            if (idx <= 0) continue;
+            var key = Plain(line[..idx]);
+            var val = line[(idx + 1)..].Trim();
+            if (string.IsNullOrEmpty(val)) continue;
+            if (key is "ho ten" or "ten" or "full name" or "name")
+                s.Name = val;
+            else if (key is "ghi chu" or "yeu cau dac biet" or "special requests" or "note")
+                s.Note = val;
+        }
     }
 
     private string Vnd(decimal v) => _lang == "vi"
@@ -494,8 +584,11 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
         return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
     }
 
-    private static bool Yes(string plain) => YesRx().IsMatch(plain);
-    private static bool No(string plain) => NoRx().IsMatch(plain);
+    private static bool IsYes(string raw, string plain) =>
+        !raw.Contains('?') && plain.Length <= 45 && !Regex.IsMatch(plain, @"\b(khong|bao nhieu|may gio|bua sang|thu cung|dau xe|noi quy)\b") && YesRx().IsMatch(plain);
+
+    private static bool IsNo(string raw, string plain) =>
+        !raw.Contains('?') && plain.Length <= 45 && NoRx().IsMatch(plain);
 
     public static string? ExtractPhone(string text)
     {
@@ -538,7 +631,7 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
             consumed.Add((m.Index, m.Index + m.Length));
         }
 
-        foreach (Match m in Regex.Matches(plain, @"\b(\d{4})-(\d{1,2})-(\d{1,2})\b"))
+        foreach (Match m in Regex.Matches(plain, @"(?<![a-z0-9])(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)"))
             Add(m, int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value), true);
         foreach (Match m in Regex.Matches(plain, @"\bngay\s*(\d{1,2})\s*thang\s*(\d{1,2})(?:\s*nam\s*(\d{4}))?"))
             if (Free(m)) Add(m, m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : today.Year, int.Parse(m.Groups[2].Value), int.Parse(m.Groups[1].Value), m.Groups[3].Success);
@@ -576,7 +669,7 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
     public static List<TimeOnly> ParseTimes(string plain)
     {
         var list = new List<TimeOnly>();
-        foreach (Match m in Regex.Matches(plain, @"\b(\d{1,2})(?::(\d{2})|h(\d{2})?|\s*(am|pm))(?!\d)"))
+        foreach (Match m in Regex.Matches(plain, @"(?<!\d)(\d{1,2})(?::(\d{2})|h(\d{2})?|\s*(am|pm))(?!\d)"))
         {
             var h = int.Parse(m.Groups[1].Value);
             var min = m.Groups[2].Success ? int.Parse(m.Groups[2].Value) : m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0;
@@ -601,6 +694,8 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
     private static partial Regex EmailRx();
     [GeneratedRegex(@"\b(cancel|cancellation|huy|refund|hoan tien)\b")]
     private static partial Regex CancelRx();
+    [GeneratedRegex(@"\b(change room|change dates|modify booking|doi phong|doi ngay|thay doi dat phong)\b")]
+    private static partial Regex ChangeRx();
     [GeneratedRegex(@"\b(pay|payment|balance|remaining|thanh toan|tra tien|chuyen khoan|con lai)\b")]
     private static partial Regex PayRx();
     [GeneratedRegex(@"\b(check ?-?out|tra phong)\b")]
@@ -621,6 +716,8 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
     private static partial Regex HourlyRx();
     [GeneratedRegex(@"(\d+)\s*(hours?|tieng|gio)\b")]
     private static partial Regex HoursRx();
+    [GeneratedRegex(@"\b(ignore|disregard|forget)\s+(all\s+|any\s+)?(previous|prior|above|earlier)\s+(instructions|prompts?|rules)|system prompt|bo qua (moi )?huong dan|in (nguyen van )?system prompt|gia 0 dong|mien phi 100%|\[system update")]
+    private static partial Regex InjectionRx();
     [GeneratedRegex(@"\b\d{1,2}\b")]
     private static partial Regex BareNumberRx();
 }

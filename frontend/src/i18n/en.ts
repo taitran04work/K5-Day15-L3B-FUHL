@@ -382,7 +382,7 @@ const en = {
   },
   book: {
     title: "Confirm and pay", payTitle: "Pay your deposit", progress: "Booking progress", stepDetails: "Your details", stepReview: "Review", stepPay: "Deposit",
-    fullName: "Full name", phone: "Phone number", phoneHint: "We'll use this to find your booking and send updates.", email: "Email", note: "Special requests",
+    fullName: "Full name", phone: "Phone number", phoneHint: "We'll use this to find your booking and send updates.", email: "Email", emailHint: "We'll send your room confirmation here once your deposit is paid.", note: "Special requests",
     noteHint: "Arrival time, extra bed, anything we should know.", guest: "Guest", holdNotice: "Your room will be held for {{minutes}} minutes while you pay the deposit with MoMo.",
     reserveAndPay: "Reserve and pay {{amount}}", heldFor: "Booking {{code}} is held for you. Time left:", payLater: "Closed this page? You can pay later from",
     summary: "Reservation summary",
@@ -398,11 +398,11 @@ const en = {
   confirmation: {
     confirmedTitle: "You're booked", confirmedDescription: "Thank you, {{name}}. Your deposit is received and your room is confirmed.",
     heldTitle: "Your booking is reserved", heldDescription: "Pay the deposit to confirm it. You can do this from your booking page.",
-    code: "Booking code", codeHint: "Keep this code. You'll need it with your phone number to view or change your booking.", backHome: "Back to the homestay",
-    lookupTitle: "Find your booking", lookupDescription: "Enter your booking code and phone number to view it.",
+    code: "Booking code", codeHint: "Keep this code. You'll need it with your email and phone number to view or change your booking.", backHome: "Back to the homestay",
+    lookupTitle: "Find your booking", lookupDescription: "Enter your booking code, email, and phone number to view it.",
   },
   manage: {
-    title: "Manage your booking", description: "Enter your booking code and the phone number you booked with.", bookingTitle: "Booking {{code}}", code: "Booking code",
+    title: "Manage your booking", description: "Enter your booking code, email, and the phone number you booked with.", bookingTitle: "Booking {{code}}", code: "Booking code",
     find: "Find booking", lookupAnother: "Look up another booking", payNow: "Pay now", change: "Change dates or room", cancel: "Cancel booking", payments: "Payments",
     pendingCancel: "Cancellation request sent", pendingChange: "Change request sent", pendingHint: "The host will review it soon. We'll message you with the result.",
     changeTitle: "Change your booking", changeDescription: "Pick new dates or another room. You'll see the new price before confirming.", room: "Room",
@@ -423,8 +423,9 @@ const en = {
     sendError: "Your message wasn't sent. Please try again.", tooLong: "Messages can be up to 2,000 characters.",
     chipRooms: "Show me the rooms", chipAvailability: "Is a room free this weekend?", chipRules: "What are the house rules?", chipManage: "Manage my booking",
     assistant: "Assistant", host: "Host", total: "total", view: "View", choose: "Choose", bookThis: "I'd like to book the {{name}}",
+    bookRoomButton: "Fill booking form for {{name}}", backToChat: "Back to chat", bookingFormTitle: "Book {{name}}", confirmAndBook: "Confirm & create booking", checkingQuote: "Checking availability & price…",
     payDeposit: "Pay deposit {{amount}}", payRemaining: "Pay balance {{amount}}", payExtra: "Pay {{amount}}", payAmount: "Pay {{amount}}",
-    showQr: "Show QR code", hideQr: "Hide QR code",
+    showQr: "Show QR code", hideQr: "Hide QR code", newChat: "New chat",
   },
   overview: {
     morning: "Good morning", afternoon: "Good afternoon", evening: "Good evening",

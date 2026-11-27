@@ -155,7 +155,7 @@ public class PolicyExtractionService(IAppDbContext db, IConfiguration config, Au
         var text = string.Join("\n\n", pages.Select(p => $"[Page {p.Page}]\n{p.Text}"));
         var resp = await client.Messages.Create(new MessageCreateParams
         {
-            Model = config["Anthropic:Model"] ?? "claude-haiku-5-5",
+            Model = string.IsNullOrWhiteSpace(config["Anthropic:Model"]) ? "claude-haiku-5-5" : config["Anthropic:Model"]!,
             MaxTokens = 16000,
             System = Instructions,
             Messages = [new UserMessageParam { Content = $"<policy_document>\n{text}\n</policy_document>" }],

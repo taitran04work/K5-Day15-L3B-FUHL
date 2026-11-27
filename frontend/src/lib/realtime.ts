@@ -42,7 +42,7 @@ export function useWidgetHub(conversationId: string | null, token: string | null
       .withAutomaticReconnect()
       .configureLogging(LogLevel.Critical)
       .build()
-    for (const name of ["messageAdded", "typing"]) {
+    for (const name of ["messageAdded", "typing", "conversationStatus"]) {
       conn.on(name, (...args: unknown[]) => (ref.current[name] as ((...a: unknown[]) => void) | undefined)?.(...args))
     }
     const join = () => conn.invoke("Join", conversationId, token).catch(() => undefined)

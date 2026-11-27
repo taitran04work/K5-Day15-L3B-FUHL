@@ -73,12 +73,22 @@ public interface IRealtimeNotifier
     Task BookingChanged(Guid tenantId, Guid bookingId);
     Task DocumentChanged(Guid tenantId, Guid documentId);
     Task Typing(Guid conversationId, bool typing);
+    Task ConversationStatusChanged(Guid conversationId, string status) => Task.CompletedTask;
 }
 
 /// <summary>Delivers a bot/owner/system message to the guest's channel.</summary>
 public interface IGuestMessenger
 {
     Task<Message> SendAsync(Guid conversationId, MessageRole role, string text, IReadOnlyList<Card>? cards = null, string? author = null, CancellationToken ct = default);
+}
+
+public record EmailMessage(string To, string Subject, string HtmlBody, string TextBody, string? ReplyTo = null);
+
+public interface IEmailSender
+{
+    bool IsEnabled { get; }
+    string WebBaseUrl => "http://localhost:5173";
+    Task SendAsync(EmailMessage message, CancellationToken ct = default);
 }
 
 public record Card(string Type, object Data);

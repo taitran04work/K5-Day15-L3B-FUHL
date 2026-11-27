@@ -45,7 +45,8 @@ public partial class ConciergeTools(
 
     private const string Identity = """
         "code": { "type": "string", "description": "Booking code, e.g. STR-7K3Q9P" },
-        "phone": { "type": "string", "description": "Phone number used for the booking" }
+        "phone": { "type": "string", "description": "Phone number used for the booking" },
+        "email": { "type": "string", "description": "Email address used for the booking" }
         """;
 
     public static readonly IReadOnlyList<ToolDef> Definitions =
@@ -61,21 +62,21 @@ public partial class ConciergeTools(
         new("quote_price", "Get the exact price breakdown and deposit for one room and stay. Shows a quote card.",
             $$"""{"type":"object","properties":{ "roomId": { "type": "string" }, {{StayProps}} },"required":["roomId","mode","start","end","guests"]}"""),
         new("create_booking", "Create the booking (held for a few minutes) and the MoMo deposit payment. Only after the guest confirmed the summary.",
-            $$"""{"type":"object","properties":{ "roomId": { "type": "string" }, {{StayProps}}, "guestName": { "type": "string" }, "guestPhone": { "type": "string" }, "guestEmail": { "type": "string" }, "note": { "type": "string", "description": "Special requests" } },"required":["roomId","mode","start","end","guests","guestName","guestPhone"]}"""),
-        new("find_booking", "Look up an existing booking. Requires the booking code and the phone number used to book.",
-            $$"""{"type":"object","properties":{ {{Identity}} },"required":["code","phone"]}"""),
-        new("quote_change", "Quote changing an existing booking's room and/or dates (availability + price difference). Does not change anything.",
-            $$"""{"type":"object","properties":{ {{Identity}}, "newRoomId": { "type": "string" }, "newStart": { "type": "string" }, "newEnd": { "type": "string" }, "guests": { "type": "integer" } },"required":["code","phone"]}"""),
-        new("request_change", "Apply (or request host approval for) a room/date change after the guest confirmed the quote.",
-            $$"""{"type":"object","properties":{ {{Identity}}, "newRoomId": { "type": "string" }, "newStart": { "type": "string" }, "newEnd": { "type": "string" }, "guests": { "type": "integer" } },"required":["code","phone"]}"""),
-        new("quote_cancellation", "Quote the refund for cancelling a booking under the active cancellation rules. Does not cancel.",
-            $$"""{"type":"object","properties":{ {{Identity}} },"required":["code","phone"]}"""),
-        new("request_cancellation", "Cancel the booking (or send the request to the host) after the guest confirmed the refund quote.",
-            $$"""{"type":"object","properties":{ {{Identity}}, "reason": { "type": "string" } },"required":["code","phone"]}"""),
-        new("create_remaining_payment", "Create a MoMo payment link for the remaining balance of a booking. Shows a payment card.",
-            $$"""{"type":"object","properties":{ {{Identity}} },"required":["code","phone"]}"""),
-        new("request_checkout", "The guest wants to check out. Notifies the host and sends the remaining payment link if a balance is due.",
-            $$"""{"type":"object","properties":{ {{Identity}} },"required":["code","phone"]}"""),
+            $$"""{"type":"object","properties":{ "roomId": { "type": "string" }, {{StayProps}}, "guestName": { "type": "string" }, "guestPhone": { "type": "string" }, "guestEmail": { "type": "string" }, "note": { "type": "string", "description": "Special requests" } },"required":["roomId","mode","start","end","guests","guestName","guestPhone","guestEmail"]}"""),
+        new("find_booking", "Look up an existing booking. Requires the booking code, phone number, and email used to book.",
+            $$"""{"type":"object","properties":{ {{Identity}} },"required":["code","phone","email"]}"""),
+        new("quote_change", "Quote changing an existing booking's room and/or dates (availability + price difference). Does not change anything. Requires code, phone, and email.",
+            $$"""{"type":"object","properties":{ {{Identity}}, "newRoomId": { "type": "string" }, "newStart": { "type": "string" }, "newEnd": { "type": "string" }, "guests": { "type": "integer" } },"required":["code","phone","email"]}"""),
+        new("request_change", "Apply (or request host approval for) a room/date change after the guest confirmed the quote. Requires code, phone, and email.",
+            $$"""{"type":"object","properties":{ {{Identity}}, "newRoomId": { "type": "string" }, "newStart": { "type": "string" }, "newEnd": { "type": "string" }, "guests": { "type": "integer" } },"required":["code","phone","email"]}"""),
+        new("quote_cancellation", "Quote the refund for cancelling a booking under the active cancellation rules. Does not cancel. Requires code, phone, and email.",
+            $$"""{"type":"object","properties":{ {{Identity}} },"required":["code","phone","email"]}"""),
+        new("request_cancellation", "Cancel the booking (or send the request to the host) after the guest confirmed the refund quote. Requires code, phone, and email.",
+            $$"""{"type":"object","properties":{ {{Identity}}, "reason": { "type": "string" } },"required":["code","phone","email"]}"""),
+        new("create_remaining_payment", "Create a MoMo payment link for the remaining balance of a booking. Shows a payment card. Requires code, phone, and email.",
+            $$"""{"type":"object","properties":{ {{Identity}} },"required":["code","phone","email"]}"""),
+        new("request_checkout", "The guest wants to check out. Notifies the host and sends the remaining payment link if a balance is due. Requires code, phone, and email.",
+            $$"""{"type":"object","properties":{ {{Identity}} },"required":["code","phone","email"]}"""),
         new("handoff_to_human", "Hand the conversation to the host (a person). Use for complaints, angry guests, requests you can't handle, or unanswered policy questions.",
             """{"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}"""),
     ];
@@ -174,18 +175,42 @@ public partial class ConciergeTools(
     {
         var stay = ParseStay(i, "start", "end");
         var guests = Int(i, "guests") ?? 2;
-        Guid? roomId = Guid.TryParse(Str(i, "roomId"), out var rid) ? rid : null;
+        var roomId = await TryResolveRoomIdAsync(ctx, Str(i, "roomId"), ct);
         var (available, unavailable) = await bookings.SearchAsync(ctx.Tenant, stay, guests, roomId, ct);
-        if (available.Count > 0) ctx.Cards.Add(Cards.Rooms(available.Select(a => (a.Room, (Quote?)a.Quote))));
+        if (available.Count > 0)
+        {
+            ctx.Cards.Add(Cards.Rooms(available.Select(a => (a.Room, (Quote?)a.Quote)), ctx.Tenant));
+            return (new
+            {
+                available = available.Select(a => new
+                {
+                    roomId = a.Room.Id, roomName = a.Room.Name, total = a.Quote.Total, deposit = a.Quote.Deposit,
+                    units = a.Quote.Units, unit = a.Quote.Mode == BookingMode.Nightly ? "nights" : "hours",
+                }),
+                unavailable = unavailable.Select(u => new { roomName = u.Room.Name, reason = u.Reason }),
+            }, $"Checked availability {Describe(stay)} for {guests} guests: {available.Count} free");
+        }
+
+        object? alternatives = null;
+        if (roomId != null)
+        {
+            var (altAvail, _) = await bookings.SearchAsync(ctx.Tenant, stay, guests, null, ct);
+            if (altAvail.Count > 0)
+            {
+                ctx.Cards.Add(Cards.Rooms(altAvail.Select(a => (a.Room, (Quote?)a.Quote)), ctx.Tenant));
+                alternatives = altAvail.Select(a => new
+                {
+                    roomId = a.Room.Id, roomName = a.Room.Name, total = a.Quote.Total, deposit = a.Quote.Deposit,
+                    units = a.Quote.Units, unit = a.Quote.Mode == BookingMode.Nightly ? "nights" : "hours",
+                });
+            }
+        }
         return (new
         {
-            available = available.Select(a => new
-            {
-                roomId = a.Room.Id, roomName = a.Room.Name, total = a.Quote.Total, deposit = a.Quote.Deposit,
-                units = a.Quote.Units, unit = a.Quote.Mode == BookingMode.Nightly ? "nights" : "hours",
-            }),
+            available = Array.Empty<object>(),
             unavailable = unavailable.Select(u => new { roomName = u.Room.Name, reason = u.Reason }),
-        }, $"Checked availability {Describe(stay)} for {guests} guests: {available.Count} free");
+            alternatives,
+        }, $"Checked availability {Describe(stay)} for {guests} guests: 0 free");
     }
 
     private async Task<(object, string)> QuotePrice(ToolContext ctx, JsonElement i, CancellationToken ct)
@@ -194,7 +219,7 @@ public partial class ConciergeTools(
         var stay = ParseStay(i, "start", "end");
         var q = await pricing.QuoteAsync(ctx.Tenant, room.Id, stay, Int(i, "guests") ?? 2, ct);
         var available = q.StartAt > clock.GetUtcNow() && await bookings.IsAvailableAsync(room.Id, q.StartAt, Availability.BlockedUntil(ctx.Tenant, stay.Mode, q.EndAt), null, ct);
-        ctx.Cards.Add(Cards.QuoteCard(q));
+        ctx.Cards.Add(Cards.QuoteCard(q, ctx.Tenant));
         return (new
         {
             roomName = room.Name, available, total = q.Total, deposit = q.Deposit, depositPercent = q.DepositPercent, units = q.Units,
@@ -233,7 +258,7 @@ public partial class ConciergeTools(
     private async Task<(object, string)> QuoteChange(ToolContext ctx, JsonElement i, CancellationToken ct)
     {
         var b = await Find(ctx, i, ct);
-        Guid? newRoom = Guid.TryParse(Str(i, "newRoomId"), out var nr) ? nr : null;
+        var newRoom = await TryResolveRoomIdAsync(ctx, Str(i, "newRoomId"), ct);
         var stay = Str(i, "newStart") != null && Str(i, "newEnd") != null ? ParseStay(i, "newStart", "newEnd", b.Mode) : null;
         var q = await changes.QuoteChangeAsync(ctx.Tenant, b, newRoom, stay, Int(i, "guests"), ct, language: ctx.Conversation.Language);
         return (new
@@ -246,7 +271,7 @@ public partial class ConciergeTools(
     private async Task<(object, string)> RequestChange(ToolContext ctx, JsonElement i, CancellationToken ct)
     {
         var b = await Find(ctx, i, ct);
-        Guid? newRoom = Guid.TryParse(Str(i, "newRoomId"), out var nr) ? nr : null;
+        var newRoom = await TryResolveRoomIdAsync(ctx, Str(i, "newRoomId"), ct);
         var stay = Str(i, "newStart") != null && Str(i, "newEnd") != null ? ParseStay(i, "newStart", "newEnd", b.Mode) : null;
         var o = await changes.RequestChangeAsync(ctx.Tenant, b, newRoom, stay, Int(i, "guests"), Actors.Guest, "Requested via chat", ct, language: ctx.Conversation.Language);
         return (new { status = o.Request.Status.ToString(), message = o.Message, newTotal = b.TotalAmount, extraPayment = o.ExtraPayment?.Amount, refunded = o.Refunded },
@@ -312,6 +337,7 @@ public partial class ConciergeTools(
         audit.Log(ctx.Tenant.Id, Actors.Bot, "conversation.handoff", nameof(Conversation), ctx.Conversation.Id, new { reason });
         await db.SaveChangesAsync(ct);
         await realtime.ConversationUpdated(ctx.Tenant.Id, ctx.Conversation.Id);
+        await realtime.ConversationStatusChanged(ctx.Conversation.Id, ConversationStatus.HumanTakeover.ToString());
         return (new { ok = true, note = "The host has been notified and will reply in this conversation." }, $"Handed off to host: {reason}");
     }
 
@@ -331,8 +357,10 @@ public partial class ConciergeTools(
     {
         var code = Str(i, "code") ?? "";
         var phone = Str(i, "phone") ?? "";
-        if (code.Length == 0 || phone.Length == 0) throw new AppException(400, "identity_required", "Both the booking code and the phone number are required.");
-        var b = await bookings.FindForGuestAsync(ctx.Tenant.Id, code, phone, ct);
+        var email = Str(i, "email") ?? "";
+        if (code.Length == 0 || phone.Length == 0 || email.Length == 0)
+            throw new AppException(400, "identity_required", "The booking code, email address, and phone number are all required.");
+        var b = await bookings.FindForGuestAsync(ctx.Tenant.Id, code, phone, email, ct);
         if (ctx.Conversation.BookingId == null)
         {
             ctx.Conversation.BookingId = b.Id;
@@ -350,12 +378,21 @@ public partial class ConciergeTools(
         balance = Math.Max(0, b.TotalAmount - b.PaidAmount + b.RefundAmount - b.CreditAmount),
     };
 
+    private async Task<Guid?> TryResolveRoomIdAsync(ToolContext ctx, string? id, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        return (await LoadRoom(ctx, id, ct)).Id;
+    }
+
     private async Task<Room> LoadRoom(ToolContext ctx, string? id, CancellationToken ct)
     {
         var rooms = await db.Rooms.Include(r => r.Photos).Where(r => r.TenantId == ctx.Tenant.Id && r.IsActive).ToListAsync(ct);
         if (Guid.TryParse(id, out var g) && rooms.FirstOrDefault(r => r.Id == g) is { } byId) return byId;
+        var clean = id?.Trim();
         // Be forgiving if the model passes a name or code instead of the id.
-        var byName = rooms.FirstOrDefault(r => string.Equals(r.Name, id, StringComparison.OrdinalIgnoreCase) || string.Equals(r.Code, id, StringComparison.OrdinalIgnoreCase));
+        var byName = rooms.FirstOrDefault(r => string.Equals(r.Name, clean, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(r.Code, clean, StringComparison.OrdinalIgnoreCase)
+            || (!string.IsNullOrEmpty(clean) && r.Name.Contains(clean, StringComparison.OrdinalIgnoreCase)));
         return byName ?? throw new AppException(404, "room_not_found", "That room doesn't exist. Call list_rooms to get room ids.");
     }
 

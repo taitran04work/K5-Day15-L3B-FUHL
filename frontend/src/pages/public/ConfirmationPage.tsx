@@ -12,9 +12,10 @@ export default function ConfirmationPage() {
   const { code = "" } = useParams()
   const { t } = useTranslation()
   const phone = sessionStorage.getItem(`stayra.booking.${code}`)
-  const booking = useGuestBooking(slug, code, phone)
+  const email = sessionStorage.getItem(`stayra.booking.email.${code}`)
+  const booking = useGuestBooking(slug, code, phone, email)
 
-  if (!phone)
+  if (!phone || !email)
     return (
       <div className="mx-auto max-w-xl px-4 py-20 text-center">
         <h1 className="text-xl">{t("confirmation.lookupTitle")}</h1>

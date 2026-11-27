@@ -60,6 +60,7 @@ public class PostgresFixture : IAsyncLifetime
         services.AddScoped<IGuestMessenger, GuestMessenger>();
         services.AddSingleton<IRealtimeNotifier, NullRealtime>();
         services.AddSingleton<IJobScheduler, NullJobs>();
+        services.AddSingleton<IEmailSender, NullEmail>();
         Services = services.BuildServiceProvider();
 
         using var scope = Services.CreateScope();
@@ -116,6 +117,12 @@ public class PostgresFixture : IAsyncLifetime
         public string Schedule<T>(Expression<Func<T, Task>> job, DateTimeOffset at) where T : notnull { Scheduled.Add($"{at:O}"); return Guid.NewGuid().ToString(); }
         public string Enqueue<T>(Expression<Func<T, Task>> job) where T : notnull { Scheduled.Add("now"); return Guid.NewGuid().ToString(); }
         public void Delete(string jobId) { }
+    }
+
+    private class NullEmail : IEmailSender
+    {
+        public bool IsEnabled => false;
+        public Task SendAsync(EmailMessage message, CancellationToken ct = default) => Task.CompletedTask;
     }
 }
 

@@ -37,6 +37,12 @@ public static class DependencyInjection
         services.AddHttpClient<IPaymentGateway, MomoGateway>();
         services.Configure<ZaloOptions>(config.GetSection("Zalo"));
         services.AddHttpClient<ZaloClient>();
+        services.Configure<SmtpOptions>(o =>
+        {
+            config.GetSection("Smtp").Bind(o);
+            if (string.IsNullOrWhiteSpace(o.WebBaseUrl)) o.WebBaseUrl = config["App:WebBaseUrl"] ?? "http://localhost:5173";
+        });
+        services.AddScoped<IEmailSender, SmtpEmailSender>();
 
         services.AddSingleton<IBookingConflictDetector, PostgresConflictDetector>();
         services.AddScoped<IJobScheduler, HangfireJobScheduler>();

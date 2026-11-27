@@ -156,6 +156,7 @@ public class InboxController(IGuestMessenger messenger, IRealtimeNotifier realti
         c.UnreadCount = 0;
         await Db.SaveChangesAsync();
         await realtime.ConversationUpdated(TenantId, id);
+        await realtime.ConversationStatusChanged(id, c.Status.ToString());
         return Summary(c, null);
     }
 
@@ -192,6 +193,7 @@ public class InboxController(IGuestMessenger messenger, IRealtimeNotifier realti
         if (status == ConversationStatus.Bot) { c.NeedsAttention = false; c.HandoffReason = null; }
         await Db.SaveChangesAsync();
         await messenger.SendAsync(id, MessageRole.System, c.Language == "vi" ? vi : en);
+        await realtime.ConversationStatusChanged(id, c.Status.ToString());
         return Summary(c, null);
     }
 

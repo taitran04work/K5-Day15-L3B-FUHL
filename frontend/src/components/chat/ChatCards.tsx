@@ -9,77 +9,133 @@ import { KeyValue, Spinner, StatusBadge } from "@/components/common"
 import { Lightbox, PhotoTile, useDevConfig } from "@/components/booking/BookingParts"
 import { api } from "@/lib/api"
 import { money, stayLabel } from "@/lib/format"
+import type { StayValue } from "@/components/booking/StayPicker"
 import type { BookingMode, BookingStatus, CardData, Payment, Photo } from "@/lib/types"
+
+export interface BookRoomSelection {
+  id: string
+  name: string
+  initialStay?: Partial<StayValue>
+}
 
 type Any = Record<string, unknown>
 const s = (v: unknown) => (typeof v === "string" ? v : "")
 const n = (v: unknown) => (typeof v === "number" ? v : 0)
 
-function RoomCards({ data, slug, onQuickReply }: { data: Any; slug: string; onQuickReply?: (text: string) => void }) {
+function RoomCards({
+  data,
+  slug,
+  onQuickReply,
+  onBookRoom,
+}: {
+  data: Any
+  slug: string
+  onQuickReply?: (text: string) => void
+  onBookRoom?: (room: BookRoomSelection) => void
+}) {
   const { t } = useTranslation()
   const rooms = (data.rooms as Any[]) ?? []
   return (
     <div className="-mx-1 flex snap-x gap-2.5 overflow-x-auto px-1 pb-1 scrollbar-none">
-      {rooms.map((r) => (
-        <div key={s(r.id)} className="w-[200px] shrink-0 snap-start overflow-hidden rounded-xl border bg-background">
-          <PhotoTile url={s(r.coverUrl)} alt={s(r.name)} className="aspect-[4/3] w-full" />
-          <div className="space-y-1 p-3">
-            <p className="truncate text-sm font-medium">{s(r.name)}</p>
-            <p className="text-xs text-muted-foreground">
-              {r.total != null ? (
-                <>
-                  <span className="font-medium text-foreground tabular">{money(n(r.total))}</span> {t("chat.total")}
-                </>
-              ) : r.nightlyPrice != null ? (
-                <>
-                  <span className="font-medium text-foreground tabular">{money(n(r.nightlyPrice))}</span> {t("room.perNight")}
-                </>
-              ) : (
-                <>
-                  <span className="font-medium text-foreground tabular">{money(n(r.hourlyPrice))}</span> {t("room.perHour")}
-                </>
+      {rooms.map((r) => {
+        const mode = s(r.mode) as BookingMode | ""
+        const units = n(r.units)
+        const start = s(r.start)
+        const end = s(r.end)
+        const guests = n(r.guests)
+        const maxGuests = n(r.maxGuests)
+        const initialStay: Partial<StayValue> | undefined =
+          start && end && (mode === "Nightly" || mode === "Hourly")
+            ? { mode, start, end, guests: guests > 0 ? guests : undefined }
+            : undefined
+        return (
+          <div key={s(r.id)} className="w-[205px] shrink-0 snap-start overflow-hidden rounded-xl border bg-background">
+            <PhotoTile url={s(r.coverUrl)} alt={s(r.name)} className="aspect-[4/3] w-full" />
+            <div className="space-y-1 p-3">
+              <p className="truncate text-sm font-medium">{s(r.name)}</p>
+              {maxGuests > 0 && (
+                <p className="text-[11px] text-muted-foreground">{t("room.upToGuests", { count: maxGuests })}</p>
               )}
-            </p>
-            <div className="flex gap-1.5 pt-1">
-              <Button asChild size="xs" variant="outline">
-                <Link to={`/h/${slug}/rooms/${s(r.id)}`}>{t("chat.view")}</Link>
-              </Button>
-              {onQuickReply && (
-                <Button size="xs" onClick={() => onQuickReply(t("chat.bookThis", { name: s(r.name) }))}>
-                  {t("chat.choose")}
+              <p className="text-xs text-muted-foreground">
+                {r.total != null ? (
+                  <>
+                    <span className="font-medium text-foreground tabular">{money(n(r.total))}</span>{" "}
+                    {units > 0 && mode
+                      ? `(${mode === "Nightly" ? t("booking.nightsCount", { count: units }) : t("booking.hoursCount", { count: units })})`
+                      : t("chat.total")}
+                  </>
+                ) : r.nightlyPrice != null ? (
+                  <>
+                    <span className="font-medium text-foreground tabular">{money(n(r.nightlyPrice))}</span> {t("room.perNight")}
+                  </>
+                ) : (
+                  <>
+                    <span className="font-medium text-foreground tabular">{money(n(r.hourlyPrice))}</span> {t("room.perHour")}
+                  </>
+                )}
+              </p>
+              <div className="flex gap-1.5 pt-1">
+                <Button asChild size="xs" variant="outline">
+                  <Link to={`/h/${slug}/rooms/${s(r.id)}`}>{t("chat.view")}</Link>
                 </Button>
-              )}
+                {onBookRoom ? (
+                  <Button size="xs" onClick={() => onBookRoom({ id: s(r.id), name: s(r.name), initialStay })}>
+                    {t("chat.choose")}
+                  </Button>
+                ) : onQuickReply ? (
+                  <Button size="xs" onClick={() => onQuickReply(t("chat.bookThis", { name: s(r.name) }))}>
+                    {t("chat.choose")}
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
 
-function GalleryCard({ data }: { data: Any }) {
+function GalleryCard({ data, onBookRoom }: { data: Any; onBookRoom?: (room: BookRoomSelection) => void }) {
+  const { t } = useTranslation()
   const photos = ((data.photos as Any[]) ?? []).map((p, i) => ({ id: String(i), url: s(p.url), caption: (p.caption as string | null) ?? null, sortOrder: i, isCover: i === 0 })) as Photo[]
   const [index, setIndex] = useState<number | null>(null)
+  const roomId = s(data.roomId)
+  const roomName = s(data.roomName)
   return (
-    <>
+    <div className="space-y-2">
       <div className="grid grid-cols-3 gap-1.5 overflow-hidden rounded-xl">
         {photos.slice(0, 6).map((p, i) => (
-          <PhotoTile key={p.id} url={p.url} alt={p.caption ?? s(data.roomName)} onClick={() => setIndex(i)} className="aspect-square w-full" />
+          <PhotoTile key={p.id} url={p.url} alt={p.caption ?? roomName} onClick={() => setIndex(i)} className="aspect-square w-full" />
         ))}
       </div>
-      <Lightbox photos={photos} index={index} onIndex={setIndex} title={s(data.roomName)} />
-    </>
+      {onBookRoom && roomId && roomName && (
+        <Button size="sm" variant="outline" className="w-full" onClick={() => onBookRoom({ id: roomId, name: roomName })}>
+          {t("chat.bookRoomButton", { name: roomName })}
+        </Button>
+      )}
+      <Lightbox photos={photos} index={index} onIndex={setIndex} title={roomName} />
+    </div>
   )
 }
 
-function QuoteCard({ data }: { data: Any }) {
+function QuoteCard({ data, onBookRoom }: { data: Any; onBookRoom?: (room: BookRoomSelection) => void }) {
   const { t } = useTranslation()
   const mode = s(data.mode) as BookingMode
+  const roomId = s(data.roomId)
+  const roomName = s(data.roomName)
+  const start = s(data.start)
+  const end = s(data.end)
+  const guests = n(data.guests)
+  const initialStay: Partial<StayValue> | undefined =
+    start && end && (mode === "Nightly" || mode === "Hourly")
+      ? { mode, start, end, guests: guests > 0 ? guests : undefined }
+      : undefined
   return (
     <div className="rounded-xl border bg-background p-3.5">
-      <p className="text-sm font-medium">{s(data.roomName)}</p>
+      <p className="text-sm font-medium">{roomName}</p>
       <p className="text-xs text-muted-foreground">
-        {stayLabel(mode, s(data.startAt), s(data.endAt))} · {t("booking.guestsCount", { count: n(data.guests) })}
+        {stayLabel(mode, s(data.startAt), s(data.endAt))} · {t("booking.guestsCount", { count: guests })}
       </p>
       <dl className="mt-2.5 border-t pt-2">
         <KeyValue label={mode === "Nightly" ? t("booking.nightsCount", { count: n(data.units) }) : t("booking.hoursCount", { count: n(data.units) })}>{money(n(data.subtotal))}</KeyValue>
@@ -89,6 +145,11 @@ function QuoteCard({ data }: { data: Any }) {
         </KeyValue>
         <KeyValue label={t("booking.depositToday", { percent: n(data.depositPercent) })}>{money(n(data.deposit))}</KeyValue>
       </dl>
+      {onBookRoom && roomId && roomName && (
+        <Button size="sm" className="mt-3 w-full" onClick={() => onBookRoom({ id: roomId, name: roomName, initialStay })}>
+          {t("chat.bookRoomButton", { name: roomName })}
+        </Button>
+      )}
     </div>
   )
 }
@@ -176,14 +237,24 @@ function PaymentBlock({ data, slug }: { data: Any; slug: string }) {
   )
 }
 
-export function ChatCard({ card, slug, onQuickReply }: { card: CardData; slug: string; onQuickReply?: (text: string) => void }) {
+export function ChatCard({
+  card,
+  slug,
+  onQuickReply,
+  onBookRoom,
+}: {
+  card: CardData
+  slug: string
+  onQuickReply?: (text: string) => void
+  onBookRoom?: (room: BookRoomSelection) => void
+}) {
   switch (card.type) {
     case "room_card":
-      return <RoomCards data={card.data} slug={slug} onQuickReply={onQuickReply} />
+      return <RoomCards data={card.data} slug={slug} onQuickReply={onQuickReply} onBookRoom={onBookRoom} />
     case "gallery":
-      return <GalleryCard data={card.data} />
+      return <GalleryCard data={card.data} onBookRoom={onBookRoom} />
     case "quote":
-      return <QuoteCard data={card.data} />
+      return <QuoteCard data={card.data} onBookRoom={onBookRoom} />
     case "booking_summary":
       return <BookingSummary data={card.data} />
     case "payment":

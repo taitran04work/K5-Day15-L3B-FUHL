@@ -35,7 +35,8 @@ public class BookingService(
     IJobScheduler jobs,
     IBookingConflictDetector conflicts,
     TimeProvider clock,
-    ILogger<BookingService> log) : IPaymentEvents
+    ILogger<BookingService> log,
+    IEmailSender? email = null) : IPaymentEvents
 {
     // ---------- Availability ----------
 
@@ -177,7 +178,11 @@ public class BookingService(
         }
         audit.Log(tenant.Id, actor, "booking.created", nameof(Booking), booking.Id, new { booking.Code, booking.Status, Source = "Owner" });
         await db.SaveChangesAsync(ct);
-        if (booking.Status == BookingStatus.Confirmed) ScheduleRemaining(tenant, booking);
+        if (booking.Status == BookingStatus.Confirmed)
+        {
+            ScheduleRemaining(tenant, booking);
+            await SendConfirmationEmailAsync(tenant, booking, room, tenant.DefaultLanguage, ct);
+        }
         await db.SaveChangesAsync(ct);
         await realtime.BookingChanged(tenant.Id, booking.Id);
         return booking;
@@ -257,13 +262,34 @@ public class BookingService(
         }
 
         var conversation = await ConversationFor(booking, ct);
+        Room? room = null;
+        if (conversation != null || to == BookingStatus.Confirmed)
+            room = await db.Rooms.IgnoreQueryFilters().FirstOrDefaultAsync(r => r.Id == booking.RoomId, ct);
         if (conversation != null)
         {
-            var room = await db.Rooms.IgnoreQueryFilters().FirstOrDefaultAsync(r => r.Id == booking.RoomId, ct);
             await messenger.SendAsync(conversation.Id, MessageRole.System, StatusMessage(booking, to, conversation.Language),
                 [Cards.BookingSummary(booking, room)], ct: ct);
         }
+        if (to == BookingStatus.Confirmed)
+            await SendConfirmationEmailAsync(tenant, booking, room, conversation?.Language ?? tenant.DefaultLanguage, ct);
         await realtime.BookingChanged(tenant.Id, booking.Id);
+    }
+
+    private async Task SendConfirmationEmailAsync(Tenant tenant, Booking booking, Room? room, string language, CancellationToken ct)
+    {
+        if (email == null || string.IsNullOrWhiteSpace(booking.GuestEmail)) return;
+        try
+        {
+            var msg = BookingEmail.Confirmation(tenant, booking, room, language, email.WebBaseUrl);
+            await email.SendAsync(msg, ct);
+            audit.Log(tenant.Id, Actors.System, "booking.email_sent", nameof(Booking), booking.Id,
+                new { to = booking.GuestEmail, delivered = email.IsEnabled });
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "Failed to send confirmation email for booking {Code} to {Email}", booking.Code, booking.GuestEmail);
+        }
     }
 
     private static string StatusMessage(Booking b, BookingStatus to, string language) =>
@@ -456,13 +482,18 @@ public class BookingService(
         return expired.Count;
     }
 
-    public async Task<Booking> FindForGuestAsync(Guid tenantId, string code, string phone, CancellationToken ct = default)
+    public async Task<Booking> FindForGuestAsync(Guid tenantId, string code, string phone, string email, CancellationToken ct = default)
     {
         var norm = BookingCode.Normalize(code);
+        var normEmail = (email ?? "").Trim();
         var booking = await db.Bookings.Include(b => b.Room).ThenInclude(r => r!.Photos)
             .FirstOrDefaultAsync(b => b.TenantId == tenantId && b.Code == norm, ct);
-        if (booking == null || !Phone.Matches(booking.GuestPhone, phone))
-            throw new AppException(404, "booking_not_found", "We couldn't find a booking with that code and phone number.");
+        if (booking == null
+            || !Phone.Matches(booking.GuestPhone, phone)
+            || string.IsNullOrWhiteSpace(normEmail)
+            || string.IsNullOrWhiteSpace(booking.GuestEmail)
+            || !string.Equals(booking.GuestEmail.Trim(), normEmail, StringComparison.OrdinalIgnoreCase))
+            throw new AppException(404, "booking_not_found", "We couldn't find a booking with that code, email, and phone number.");
         return booking;
     }
 }

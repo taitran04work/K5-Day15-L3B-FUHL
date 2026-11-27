@@ -21,8 +21,9 @@ import { usePublic } from "./PublicLayout"
 export const vnPhone = /^(0|84)(3|5|7|8|9)\d{8}$/
 export const normalizePhone = (v: string) => v.replace(/[^\d]/g, "")
 
-export function rememberBookingPhone(code: string, phone: string) {
+export function rememberBookingPhone(code: string, phone: string, email?: string | null) {
   sessionStorage.setItem(`stayra.booking.${code}`, phone)
+  if (email) sessionStorage.setItem(`stayra.booking.email.${code}`, email)
 }
 
 type Step = "details" | "review" | "pay"
@@ -46,7 +47,7 @@ export default function BookPage() {
   const schema = z.object({
     guestName: z.string().trim().min(2, t("validation.name_too_short")),
     guestPhone: z.string().refine((v) => vnPhone.test(normalizePhone(v)), t("validation.phone")),
-    guestEmail: z.union([z.literal(""), z.string().email(t("validation.email"))]),
+    guestEmail: z.string().trim().email(t("validation.email")),
     note: z.string().max(1000).optional(),
   })
   type FormValues = z.infer<typeof schema>
@@ -67,11 +68,11 @@ export default function BookPage() {
         ...stay,
         guestName: v.guestName,
         guestPhone: v.guestPhone,
-        guestEmail: v.guestEmail || null,
+        guestEmail: v.guestEmail.trim(),
         note: v.note || null,
       }),
     onSuccess: (res) => {
-      rememberBookingPhone(res.booking.code, res.phone)
+      rememberBookingPhone(res.booking.code, res.phone, form.getValues("guestEmail").trim())
       setCreated(res)
       if (!res.deposit) navigate(`/h/${slug}/booking/${res.booking.code}`)
       else setStep("pay")
@@ -199,7 +200,7 @@ export default function BookPage() {
             <Field label={t("book.phone")} htmlFor="guestPhone" error={form.formState.errors.guestPhone?.message} hint={t("book.phoneHint")}>
               <Input id="guestPhone" type="tel" inputMode="tel" autoComplete="tel" placeholder="0912 345 678" className="h-10 bg-background" {...form.register("guestPhone")} aria-invalid={!!form.formState.errors.guestPhone} />
             </Field>
-            <Field label={t("book.email")} htmlFor="guestEmail" optional error={form.formState.errors.guestEmail?.message}>
+            <Field label={t("book.email")} htmlFor="guestEmail" hint={t("book.emailHint")} error={form.formState.errors.guestEmail?.message}>
               <Input id="guestEmail" type="email" autoComplete="email" className="h-10 bg-background" {...form.register("guestEmail")} />
             </Field>
             <Field label={t("book.note")} htmlFor="note" optional hint={t("book.noteHint")}>

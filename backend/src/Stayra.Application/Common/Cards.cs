@@ -9,21 +9,34 @@ public static class Cards
     public static string? Cover(Room r) =>
         (r.Photos.FirstOrDefault(p => p.IsCover) ?? r.Photos.OrderBy(p => p.SortOrder).FirstOrDefault())?.Url;
 
-    public static Card Rooms(IEnumerable<(Room Room, Quote? Quote)> rooms) => new("room_card", new
+    public static Card Rooms(IEnumerable<(Room Room, Quote? Quote)> rooms, Tenant? tenant = null) => new("room_card", new
     {
-        rooms = rooms.Select(x => new
+        rooms = rooms.Select(x =>
         {
-            id = x.Room.Id,
-            name = x.Room.Name,
-            coverUrl = Cover(x.Room),
-            maxGuests = x.Room.MaxGuests,
-            beds = x.Room.Beds,
-            nightlyPrice = x.Room.SupportsNightly ? x.Room.BaseNightlyPrice : (decimal?)null,
-            hourlyPrice = x.Room.SupportsHourly ? x.Room.BaseHourlyPrice : (decimal?)null,
-            total = x.Quote?.Total,
-            deposit = x.Quote?.Deposit,
-            units = x.Quote?.Units,
-            mode = x.Quote?.Mode.ToString(),
+            string? start = null, end = null;
+            if (x.Quote is { } q && tenant != null)
+            {
+                var fmt = q.Mode == BookingMode.Nightly ? "yyyy-MM-dd" : "yyyy-MM-ddTHH:mm";
+                start = TenantTime.ToLocal(tenant, q.StartAt).ToString(fmt);
+                end = TenantTime.ToLocal(tenant, q.EndAt).ToString(fmt);
+            }
+            return new
+            {
+                id = x.Room.Id,
+                name = x.Room.Name,
+                coverUrl = Cover(x.Room),
+                maxGuests = x.Room.MaxGuests,
+                beds = x.Room.Beds,
+                nightlyPrice = x.Room.SupportsNightly ? x.Room.BaseNightlyPrice : (decimal?)null,
+                hourlyPrice = x.Room.SupportsHourly ? x.Room.BaseHourlyPrice : (decimal?)null,
+                total = x.Quote?.Total,
+                deposit = x.Quote?.Deposit,
+                units = x.Quote?.Units,
+                mode = x.Quote?.Mode.ToString(),
+                guests = x.Quote?.Guests,
+                start,
+                end,
+            };
         }).ToList(),
     });
 
@@ -34,22 +47,30 @@ public static class Cards
         photos = r.Photos.OrderBy(p => p.SortOrder).Select(p => new { url = p.Url, caption = p.Caption }).ToList(),
     });
 
-    public static Card QuoteCard(Quote q) => new("quote", new
+    public static Card QuoteCard(Quote q, Tenant? tenant = null)
     {
-        roomId = q.RoomId,
-        roomName = q.RoomName,
-        mode = q.Mode.ToString(),
-        startAt = q.StartAt,
-        endAt = q.EndAt,
-        units = q.Units,
-        guests = q.Guests,
-        subtotal = q.Subtotal,
-        extraGuestFee = q.ExtraGuestFee,
-        total = q.Total,
-        deposit = q.Deposit,
-        depositPercent = q.DepositPercent,
-        lines = q.Lines.Select(l => new { label = l.Label, price = l.Price, rule = l.RuleName }).ToList(),
-    });
+        var fmt = q.Mode == BookingMode.Nightly ? "yyyy-MM-dd" : "yyyy-MM-ddTHH:mm";
+        var start = tenant != null ? TenantTime.ToLocal(tenant, q.StartAt).ToString(fmt) : null;
+        var end = tenant != null ? TenantTime.ToLocal(tenant, q.EndAt).ToString(fmt) : null;
+        return new("quote", new
+        {
+            roomId = q.RoomId,
+            roomName = q.RoomName,
+            mode = q.Mode.ToString(),
+            startAt = q.StartAt,
+            endAt = q.EndAt,
+            start,
+            end,
+            units = q.Units,
+            guests = q.Guests,
+            subtotal = q.Subtotal,
+            extraGuestFee = q.ExtraGuestFee,
+            total = q.Total,
+            deposit = q.Deposit,
+            depositPercent = q.DepositPercent,
+            lines = q.Lines.Select(l => new { label = l.Label, price = l.Price, rule = l.RuleName }).ToList(),
+        });
+    }
 
     public static Card BookingSummary(Booking b, Room? room) => new("booking_summary", new
     {

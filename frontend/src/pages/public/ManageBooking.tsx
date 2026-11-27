@@ -20,12 +20,12 @@ import type { ChangeQuote, GuestBooking, Payment, PublicTenant, RefundQuote, Roo
 import { normalizePhone, rememberBookingPhone, vnPhone } from "./BookPage"
 import { usePublic } from "./PublicLayout"
 
-export function useGuestBooking(slug: string, code: string | null, phone: string | null) {
+export function useGuestBooking(slug: string, code: string | null, phone: string | null, email: string | null) {
   return useQuery({
-    queryKey: ["guest-booking", slug, code],
-    enabled: !!code && !!phone,
+    queryKey: ["guest-booking", slug, code, phone, email],
+    enabled: !!code && !!phone && !!email,
     retry: false,
-    queryFn: () => api.post<GuestBooking>(`/api/public/${slug}/bookings/lookup`, { code, phone }),
+    queryFn: () => api.post<GuestBooking>(`/api/public/${slug}/bookings/lookup`, { code, phone, email }),
   })
 }
 
@@ -64,12 +64,13 @@ export function BookingSummaryCard({ booking, tenant }: { booking: GuestBooking;
   )
 }
 
-function ChangeDialog({ open, onOpenChange, booking, slug, phone, tenant, rooms }: {
+function ChangeDialog({ open, onOpenChange, booking, slug, phone, email, tenant, rooms }: {
   open: boolean
   onOpenChange: (o: boolean) => void
   booking: GuestBooking
   slug: string
   phone: string
+  email: string
   tenant: PublicTenant
   rooms: Room[]
 }) {
@@ -90,10 +91,10 @@ function ChangeDialog({ open, onOpenChange, booking, slug, phone, tenant, rooms 
   const busy = useBusy(slug, roomId)
 
   const quote = useMutation({
-    mutationFn: () => api.post<ChangeQuote>(`/api/public/${slug}/bookings/${booking.code}/change-quote`, { phone, roomId, ...stay }),
+    mutationFn: () => api.post<ChangeQuote>(`/api/public/${slug}/bookings/${booking.code}/change-quote`, { phone, email, roomId, ...stay }),
   })
   const apply = useMutation({
-    mutationFn: () => api.post<{ message: string; status: string; extraPayment: Payment | null }>(`/api/public/${slug}/bookings/${booking.code}/change`, { phone, roomId, ...stay }),
+    mutationFn: () => api.post<{ message: string; status: string; extraPayment: Payment | null }>(`/api/public/${slug}/bookings/${booking.code}/change`, { phone, email, roomId, ...stay }),
     onSuccess: (res) => {
       toast.success(res.message)
       void qc.invalidateQueries({ queryKey: ["guest-booking", slug, booking.code] })
@@ -171,7 +172,7 @@ function ChangeDialog({ open, onOpenChange, booking, slug, phone, tenant, rooms 
   )
 }
 
-function CancelDialog({ open, onOpenChange, booking, slug, phone }: { open: boolean; onOpenChange: (o: boolean) => void; booking: GuestBooking; slug: string; phone: string }) {
+function CancelDialog({ open, onOpenChange, booking, slug, phone, email }: { open: boolean; onOpenChange: (o: boolean) => void; booking: GuestBooking; slug: string; phone: string; email: string }) {
   const { t } = useTranslation()
   const errorMessage = useErrorMessage()
   const qc = useQueryClient()
@@ -179,10 +180,10 @@ function CancelDialog({ open, onOpenChange, booking, slug, phone }: { open: bool
   const quote = useQuery({
     queryKey: ["cancel-quote", slug, booking.code],
     enabled: open,
-    queryFn: () => api.post<RefundQuote>(`/api/public/${slug}/bookings/${booking.code}/cancel-quote`, { phone }),
+    queryFn: () => api.post<RefundQuote>(`/api/public/${slug}/bookings/${booking.code}/cancel-quote`, { phone, email }),
   })
   const cancel = useMutation({
-    mutationFn: () => api.post<{ message: string }>(`/api/public/${slug}/bookings/${booking.code}/cancel`, { phone, reason: reason || null }),
+    mutationFn: () => api.post<{ message: string }>(`/api/public/${slug}/bookings/${booking.code}/cancel`, { phone, email, reason: reason || null }),
     onSuccess: (res) => {
       toast.success(res.message)
       void qc.invalidateQueries({ queryKey: ["guest-booking", slug, booking.code] })
@@ -225,7 +226,7 @@ function CancelDialog({ open, onOpenChange, booking, slug, phone }: { open: bool
   )
 }
 
-export function GuestBookingView({ booking, slug, phone }: { booking: GuestBooking; slug: string; phone: string }) {
+export function GuestBookingView({ booking, slug, phone, email }: { booking: GuestBooking; slug: string; phone: string; email: string }) {
   const { t } = useTranslation()
   const { home } = usePublic()
   const errorMessage = useErrorMessage()
@@ -236,7 +237,7 @@ export function GuestBookingView({ booking, slug, phone }: { booking: GuestBooki
   const modifiable = ["Hold", "PendingDeposit", "Confirmed"].includes(booking.status) && new Date(booking.startAt) > new Date()
 
   const pay = useMutation({
-    mutationFn: () => api.post<Payment>(`/api/public/${slug}/bookings/${booking.code}/pay`, { phone }),
+    mutationFn: () => api.post<Payment>(`/api/public/${slug}/bookings/${booking.code}/pay`, { phone, email }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["guest-booking", slug, booking.code] }),
   })
 
@@ -300,8 +301,8 @@ export function GuestBookingView({ booking, slug, phone }: { booking: GuestBooki
       </aside>
       {modifiable && (
         <>
-          <ChangeDialog open={changeOpen} onOpenChange={setChangeOpen} booking={booking} slug={slug} phone={phone} tenant={home.tenant} rooms={home.rooms} />
-          <CancelDialog open={cancelOpen} onOpenChange={setCancelOpen} booking={booking} slug={slug} phone={phone} />
+          <ChangeDialog open={changeOpen} onOpenChange={setChangeOpen} booking={booking} slug={slug} phone={phone} email={email} tenant={home.tenant} rooms={home.rooms} />
+          <CancelDialog open={cancelOpen} onOpenChange={setCancelOpen} booking={booking} slug={slug} phone={phone} email={email} />
         </>
       )}
     </div>
@@ -314,21 +315,23 @@ export default function ManageBooking() {
   const errorMessage = useErrorMessage()
   const [params, setParams] = useSearchParams()
   const initialCode = params.get("code") ?? ""
-  const [lookup, setLookup] = useState<{ code: string; phone: string } | null>(() => {
-    const remembered = initialCode ? sessionStorage.getItem(`stayra.booking.${initialCode}`) : null
-    return remembered ? { code: initialCode, phone: remembered } : null
+  const [lookup, setLookup] = useState<{ code: string; phone: string; email: string } | null>(() => {
+    const rememberedPhone = initialCode ? sessionStorage.getItem(`stayra.booking.${initialCode}`) : null
+    const rememberedEmail = initialCode ? sessionStorage.getItem(`stayra.booking.email.${initialCode}`) : null
+    return rememberedPhone && rememberedEmail ? { code: initialCode, phone: rememberedPhone, email: rememberedEmail } : null
   })
-  const booking = useGuestBooking(slug, lookup?.code ?? null, lookup?.phone ?? null)
+  const booking = useGuestBooking(slug, lookup?.code ?? null, lookup?.phone ?? null, lookup?.email ?? null)
 
   const schema = z.object({
     code: z.string().trim().min(4, t("validation.required")),
     phone: z.string().refine((v) => vnPhone.test(normalizePhone(v)), t("validation.phone")),
+    email: z.string().trim().email(t("validation.email")),
   })
-  const form = useForm<z.infer<typeof schema>>({ resolver: zodResolver(schema), defaultValues: { code: initialCode, phone: "" } })
+  const form = useForm<z.infer<typeof schema>>({ resolver: zodResolver(schema), defaultValues: { code: initialCode, phone: "", email: "" } })
 
   useEffect(() => {
     if (booking.data && lookup) {
-      rememberBookingPhone(booking.data.code, lookup.phone)
+      rememberBookingPhone(booking.data.code, lookup.phone, lookup.email)
       if (params.get("code") !== booking.data.code) setParams({ code: booking.data.code }, { replace: true })
     }
   }, [booking.data, lookup, params, setParams])
@@ -340,8 +343,8 @@ export default function ManageBooking() {
 
       {booking.data && lookup ? (
         <div className="mt-8">
-          <GuestBookingView booking={booking.data} slug={slug} phone={lookup.phone} />
-          <Button variant="link" className="mt-8 px-0" onClick={() => { setLookup(null); form.reset({ code: "", phone: "" }) }}>
+          <GuestBookingView booking={booking.data} slug={slug} phone={lookup.phone} email={lookup.email} />
+          <Button variant="link" className="mt-8 px-0" onClick={() => { setLookup(null); form.reset({ code: "", phone: "", email: "" }) }}>
             {t("manage.lookupAnother")}
           </Button>
         </div>
@@ -349,10 +352,13 @@ export default function ManageBooking() {
         <form
           className="mt-8 max-w-md space-y-4"
           noValidate
-          onSubmit={form.handleSubmit((v) => setLookup({ code: v.code.trim().toUpperCase(), phone: normalizePhone(v.phone) }))}
+          onSubmit={form.handleSubmit((v) => setLookup({ code: v.code.trim().toUpperCase(), phone: normalizePhone(v.phone), email: v.email.trim() }))}
         >
           <Field label={t("manage.code")} htmlFor="code" error={form.formState.errors.code?.message}>
             <Input id="code" placeholder="STR-7K3Q9P" className="uppercase" autoComplete="off" {...form.register("code")} />
+          </Field>
+          <Field label={t("book.email")} htmlFor="email" error={form.formState.errors.email?.message}>
+            <Input id="email" type="email" inputMode="email" placeholder="ten@email.com" autoComplete="email" {...form.register("email")} />
           </Field>
           <Field label={t("book.phone")} htmlFor="phone" error={form.formState.errors.phone?.message}>
             <Input id="phone" type="tel" inputMode="tel" placeholder="0912 345 678" {...form.register("phone")} />

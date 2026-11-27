@@ -17,10 +17,10 @@ public record StayQuery(BookingMode Mode, string Start, string End, int Guests, 
 public record PublicBookingRequest(Guid RoomId, BookingMode Mode, string Start, string End, int Guests, string GuestName, string GuestPhone,
     string? GuestEmail, string? Note);
 
-public record LookupRequest(string Code, string Phone);
-public record GuestChangeRequest(string Phone, Guid? RoomId, BookingMode? Mode, string? Start, string? End, int? Guests);
-public record GuestCancelRequest(string Phone, string? Reason);
-public record GuestPhoneRequest(string Phone);
+public record LookupRequest(string Code, string Phone, string Email);
+public record GuestChangeRequest(string Phone, string Email, Guid? RoomId, BookingMode? Mode, string? Start, string? End, int? Guests);
+public record GuestCancelRequest(string Phone, string Email, string? Reason);
+public record GuestPhoneRequest(string Phone, string Email);
 
 public class PublicBookingValidator : AbstractValidator<PublicBookingRequest>
 {
@@ -28,7 +28,7 @@ public class PublicBookingValidator : AbstractValidator<PublicBookingRequest>
     {
         RuleFor(x => x.GuestName).NotEmpty().WithErrorCode("required").MinimumLength(2).WithErrorCode("name_too_short").MaximumLength(120);
         RuleFor(x => x.GuestPhone).NotEmpty().WithErrorCode("required").Must(p => Phone.NormalizeVn(p) != null).WithErrorCode("phone");
-        RuleFor(x => x.GuestEmail).EmailAddress().When(x => !string.IsNullOrWhiteSpace(x.GuestEmail)).WithErrorCode("email");
+        RuleFor(x => x.GuestEmail).NotEmpty().WithErrorCode("required").EmailAddress().WithErrorCode("email");
         RuleFor(x => x.Guests).InclusiveBetween(1, 30).WithErrorCode("out_of_range");
         RuleFor(x => x.Note).MaximumLength(1000).WithErrorCode("too_long");
     }
@@ -123,31 +123,31 @@ public class PublicController(StayraDbContext db, BookingService bookings, Chang
     }
 
     [HttpPost("bookings/lookup")]
-    public async Task<GuestBookingDto> Lookup(string slug, LookupRequest req) => await GuestView(await Find(req.Code, req.Phone));
+    public async Task<GuestBookingDto> Lookup(string slug, LookupRequest req) => await GuestView(await Find(req.Code, req.Phone, req.Email));
 
     [HttpPost("bookings/{code}/change-quote")]
     public async Task<ChangeQuote> ChangeQuote(string slug, string code, GuestChangeRequest req)
     {
-        var b = await Find(code, req.Phone);
+        var b = await Find(code, req.Phone, req.Email);
         return await changes.QuoteChangeAsync(CurrentTenant, b, req.RoomId, StayOf(req, b), req.Guests);
     }
 
     [HttpPost("bookings/{code}/change")]
     public async Task<object> Change(string slug, string code, GuestChangeRequest req)
     {
-        var b = await Find(code, req.Phone);
+        var b = await Find(code, req.Phone, req.Email);
         var outcome = await changes.RequestChangeAsync(CurrentTenant, b, req.RoomId, StayOf(req, b), req.Guests, Actors.Guest, null);
         return new { message = outcome.Message, status = outcome.Request.Status, extraPayment = outcome.ExtraPayment is null ? null : PaymentDto.From(outcome.ExtraPayment), booking = await GuestView(b) };
     }
 
     [HttpPost("bookings/{code}/cancel-quote")]
     public async Task<Application.Refunds.RefundQuote> CancelQuote(string slug, string code, GuestPhoneRequest req) =>
-        await changes.QuoteCancellationAsync(CurrentTenant, await Find(code, req.Phone));
+        await changes.QuoteCancellationAsync(CurrentTenant, await Find(code, req.Phone, req.Email));
 
     [HttpPost("bookings/{code}/cancel")]
     public async Task<object> Cancel(string slug, string code, GuestCancelRequest req)
     {
-        var b = await Find(code, req.Phone);
+        var b = await Find(code, req.Phone, req.Email);
         var outcome = await changes.RequestCancellationAsync(CurrentTenant, b, Actors.Guest, req.Reason);
         return new { message = outcome.Message, status = outcome.Request.Status, refunded = outcome.Refunded, booking = await GuestView(b) };
     }
@@ -155,7 +155,7 @@ public class PublicController(StayraDbContext db, BookingService bookings, Chang
     [HttpPost("bookings/{code}/pay")]
     public async Task<PaymentDto> Pay(string slug, string code, GuestPhoneRequest req, [FromServices] Application.Payments.PaymentService payments)
     {
-        var b = await Find(code, req.Phone);
+        var b = await Find(code, req.Phone, req.Email);
         var t = CurrentTenant;
         if (b.Status is BookingStatus.Hold or BookingStatus.PendingDeposit)
         {
@@ -174,7 +174,7 @@ public class PublicController(StayraDbContext db, BookingService bookings, Chang
         return new { payment = PaymentDto.From(p), bookingStatus = p.Booking!.Status, bookingCode = p.Booking.Code };
     }
 
-    private async Task<Booking> Find(string code, string phone) => await bookings.FindForGuestAsync(CurrentTenant.Id, code, phone);
+    private async Task<Booking> Find(string code, string phone, string email) => await bookings.FindForGuestAsync(CurrentTenant.Id, code, phone, email);
 
     private async Task<GuestBookingDto> GuestView(Booking b)
     {

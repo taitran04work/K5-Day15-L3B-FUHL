@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Stayra.Application.Bookings;
+using Stayra.Domain;
 using Stayra.Infrastructure.Concierge;
 using Stayra.Infrastructure.Messaging;
 using Stayra.Infrastructure.Payments;
@@ -118,6 +120,7 @@ public class OfflineParsingTests
     [InlineData("ngay mai", "2026-11-28")]
     [InlineData("dec 20 - dec 23", "2026-12-20,2026-12-23")]
     [InlineData("3/1", "2027-01-03")]
+    [InlineData("2026-11-28T14:00 den 2026-11-28T17:00", "2026-11-28")]
     public void Dates_are_parsed(string text, string expected) =>
         string.Join(",", OfflineConcierge.ParseDates(OfflineConcierge.Plain(text), Today).Select(d => d.ToString("yyyy-MM-dd"))).Should().Be(expected);
 
@@ -126,8 +129,19 @@ public class OfflineParsingTests
     {
         OfflineConcierge.ParseTimes("tu 14h den 17:30").Should().Equal(new TimeOnly(14, 0), new TimeOnly(17, 30));
         OfflineConcierge.ParseTimes("2pm to 5pm").Should().Equal(new TimeOnly(14, 0), new TimeOnly(17, 0));
+        OfflineConcierge.ParseTimes("2026-11-28T14:00 to 2026-11-28T17:00").Should().Equal(new TimeOnly(14, 0), new TimeOnly(17, 0));
         OfflineConcierge.ExtractPhone("call me on +84 912 345 678 please").Should().Be("0912345678");
         OfflineConcierge.ExtractPhone("STR-ABC234").Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("bữa sáng", "breakfast")]
+    [InlineData("chó mèo", "Pets")]
+    [InlineData("đậu xe ô tô", "parking")]
+    public void Bilingual_policy_passage_matches_vietnamese_queries(string query, string expectedEnglishWord)
+    {
+        var chunk = "A simple breakfast is served from 07:00 to 09:30. Pets are not allowed, except registered assistance animals. Free parking is available for motorbikes; car parking is on the street.";
+        PolicySearchService.BestPassage(chunk, query).Should().Contain(expectedEnglishWord);
     }
 
     [Theory]
@@ -135,4 +149,44 @@ public class OfflineParsingTests
     [InlineData("Hi, is breakfast included?", "en")]
     [InlineData("cho minh hoi gia phong", "vi")]
     public void Language_detection(string text, string expected) => ConciergeService.DetectLanguage(text, "en").Should().Be(expected);
+
+    [Fact]
+    public void Confirmation_email_includes_room_dates_and_escapes_html()
+    {
+        var tenant = Fixtures.Tenant();
+        tenant.Name = "Pine Hill Homestay";
+        tenant.Slug = "pine-hill";
+        tenant.Address = "12 Hoa Hồng, Đà Lạt";
+        tenant.Phone = "0912345678";
+        var room = Fixtures.Room(tenant);
+        var booking = new Booking
+        {
+            TenantId = tenant.Id,
+            Code = "STR-7K3Q9P",
+            RoomId = room.Id,
+            Room = room,
+            Mode = BookingMode.Nightly,
+            StartAt = new DateTimeOffset(2026, 11, 28, 7, 0, 0, TimeSpan.Zero),
+            EndAt = new DateTimeOffset(2026, 11, 29, 5, 0, 0, TimeSpan.Zero),
+            Guests = 2,
+            GuestName = "Lan <script>alert(1)</script>",
+            GuestPhone = "0912345678",
+            GuestEmail = "guest@example.com",
+            Note = "Late arrival",
+            TotalAmount = 1_020_000,
+            DepositAmount = 306_000,
+            PaidAmount = 306_000,
+            Status = BookingStatus.Confirmed,
+        };
+
+        var vi = BookingEmail.Confirmation(tenant, booking, room, "vi", "http://localhost:5173");
+        vi.To.Should().Be("guest@example.com");
+        vi.Subject.Should().Contain("STR-7K3Q9P").And.Contain("Pine Hill Homestay");
+        vi.TextBody.Should().Contain("Pine Loft").And.Contain("28/11/2026").And.Contain("29/11/2026").And.Contain("306.000 ₫").And.Contain("714.000 ₫");
+        vi.HtmlBody.Should().NotContain("<script>").And.Contain("&lt;script&gt;").And.Contain("http://localhost:5173/h/pine-hill/manage?code=STR-7K3Q9P");
+
+        var en = BookingEmail.Confirmation(tenant, booking, room, "en", "http://localhost:5173");
+        en.Subject.Should().Contain("Booking confirmed: STR-7K3Q9P");
+        en.TextBody.Should().Contain("Pine Loft").And.Contain("₫306,000").And.Contain("₫714,000");
+    }
 }

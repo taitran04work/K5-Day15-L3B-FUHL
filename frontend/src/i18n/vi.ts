@@ -381,7 +381,7 @@ const vi = {
   },
   book: {
     title: "Xác nhận và thanh toán", payTitle: "Thanh toán tiền cọc", progress: "Tiến trình đặt phòng", stepDetails: "Thông tin của bạn", stepReview: "Kiểm tra", stepPay: "Đặt cọc",
-    fullName: "Họ và tên", phone: "Số điện thoại", phoneHint: "Dùng để tra cứu đặt phòng và nhận thông báo.", email: "Email", note: "Yêu cầu đặc biệt",
+    fullName: "Họ và tên", phone: "Số điện thoại", phoneHint: "Dùng để tra cứu đặt phòng và nhận thông báo.", email: "Email", emailHint: "Dùng để gửi email xác nhận thông tin phòng sau khi hoàn tất đặt cọc.", note: "Yêu cầu đặc biệt",
     noteHint: "Giờ đến, thêm giường, hoặc điều gì chúng tôi nên biết.", guest: "Khách", holdNotice: "Phòng sẽ được giữ {{minutes}} phút trong lúc bạn đặt cọc qua MoMo.",
     reserveAndPay: "Đặt phòng và thanh toán {{amount}}", heldFor: "Đặt phòng {{code}} đang được giữ cho bạn. Thời gian còn lại:", payLater: "Lỡ đóng trang? Bạn có thể thanh toán sau tại",
     summary: "Tóm tắt đặt phòng",
@@ -397,11 +397,11 @@ const vi = {
   confirmation: {
     confirmedTitle: "Đặt phòng thành công", confirmedDescription: "Cảm ơn {{name}}. Chúng tôi đã nhận tiền cọc và xác nhận phòng của bạn.",
     heldTitle: "Phòng đã được giữ", heldDescription: "Hãy thanh toán tiền cọc để xác nhận. Bạn có thể làm việc này ở trang đặt phòng.",
-    code: "Mã đặt phòng", codeHint: "Hãy giữ mã này. Bạn cần mã và số điện thoại để xem hoặc thay đổi đặt phòng.", backHome: "Về trang homestay",
-    lookupTitle: "Tìm đặt phòng của bạn", lookupDescription: "Nhập mã đặt phòng và số điện thoại để xem.",
+    code: "Mã đặt phòng", codeHint: "Hãy giữ mã này. Bạn cần mã, email và số điện thoại để xem hoặc thay đổi đặt phòng.", backHome: "Về trang homestay",
+    lookupTitle: "Tìm đặt phòng của bạn", lookupDescription: "Nhập mã đặt phòng, email và số điện thoại để xem.",
   },
   manage: {
-    title: "Quản lý đặt phòng", description: "Nhập mã đặt phòng và số điện thoại bạn đã dùng khi đặt.", bookingTitle: "Đặt phòng {{code}}", code: "Mã đặt phòng",
+    title: "Quản lý đặt phòng", description: "Nhập mã đặt phòng, email và số điện thoại bạn đã dùng khi đặt.", bookingTitle: "Đặt phòng {{code}}", code: "Mã đặt phòng",
     find: "Tìm đặt phòng", lookupAnother: "Tra cứu đặt phòng khác", payNow: "Thanh toán ngay", change: "Đổi ngày hoặc đổi phòng", cancel: "Hủy đặt phòng", payments: "Thanh toán",
     pendingCancel: "Đã gửi yêu cầu hủy", pendingChange: "Đã gửi yêu cầu thay đổi", pendingHint: "Chủ nhà sẽ sớm xem xét. Chúng tôi sẽ nhắn kết quả cho bạn.",
     changeTitle: "Thay đổi đặt phòng", changeDescription: "Chọn ngày mới hoặc phòng khác. Bạn sẽ thấy giá mới trước khi xác nhận.", room: "Phòng",
@@ -422,8 +422,9 @@ const vi = {
     sendError: "Tin nhắn chưa gửi được. Vui lòng thử lại.", tooLong: "Tin nhắn tối đa 2.000 ký tự.",
     chipRooms: "Cho mình xem các phòng", chipAvailability: "Cuối tuần này còn phòng không?", chipRules: "Nội quy homestay thế nào?", chipManage: "Quản lý đặt phòng của mình",
     assistant: "Trợ lý", host: "Chủ nhà", total: "tổng", view: "Xem", choose: "Chọn", bookThis: "Mình muốn đặt phòng {{name}}",
+    bookRoomButton: "Điền thông tin đặt phòng {{name}}", backToChat: "Quay lại chat", bookingFormTitle: "Đặt {{name}}", confirmAndBook: "Xác nhận & tạo đặt phòng", checkingQuote: "Đang kiểm tra giá & lịch trống…",
     payDeposit: "Thanh toán cọc {{amount}}", payRemaining: "Thanh toán {{amount}} còn lại", payExtra: "Thanh toán {{amount}}", payAmount: "Thanh toán {{amount}}",
-    showQr: "Hiện mã QR", hideQr: "Ẩn mã QR",
+    showQr: "Hiện mã QR", hideQr: "Ẩn mã QR", newChat: "Cuộc trò chuyện mới",
   },
   overview: {
     morning: "Chào buổi sáng", afternoon: "Chào buổi chiều", evening: "Chào buổi tối",

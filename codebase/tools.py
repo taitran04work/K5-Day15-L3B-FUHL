@@ -35,12 +35,21 @@ def _round_thousand(amount: float) -> int:
 
 def _find_room(data: dict, room_query: str) -> dict | None:
     q = _norm(room_query).strip()
-    for r in data["rooms"]:
-        if _norm(r["code"]) == q or _norm(r["name"]) == q:
-            return r
-    for r in data["rooms"]:
-        if q and (q in _norm(r["name"]) or q in _norm(r["code"])):
-            return r
+    q_clean = re.sub(r"^(?:phong|room|can)\s+", "", q).strip()
+    for candidate in (q, q_clean):
+        if not candidate:
+            continue
+        for r in data["rooms"]:
+            if _norm(r["code"]).strip() == candidate or _norm(r["name"]).strip() == candidate:
+                return r
+    for candidate in (q, q_clean):
+        if not candidate:
+            continue
+        for r in data["rooms"]:
+            rn = _norm(r["name"]).strip()
+            rc = _norm(r["code"]).strip()
+            if candidate in rn or candidate in rc or rn in candidate or rc in candidate:
+                return r
     return None
 
 
@@ -107,19 +116,41 @@ def search_policy(query: str) -> dict:
     Output: dict gồm faqs và sections kèm mã nguồn (CS-01..CS-07, FAQ-01..FAQ-04).
     Tác động ra ngoài: Không (chỉ đọc dữ liệu nội quy)."""
     data = _load_data()
-    tokens = [t for t in _norm(query).split() if len(t) >= 2]
+    stop = {"co", "khong", "cho", "minh", "ban", "hoi", "ve", "la", "va", "cua", "nhung", "cac", "nay", "the", "nao", "duoc", "homestay", "tai", "voi"}
+    tokens = [t for t in _norm(query).split() if len(t) >= 2 and t not in stop]
     synonym_map = {
         "sang": ["breakfast", "bua", "an"],
+        "bua": ["breakfast", "sang"],
         "cho": ["pet", "thu", "cung", "meo"],
         "meo": ["pet", "thu", "cung"],
-        "xe": ["parking", "oto", "may", "dau"],
+        "pet": ["thu", "cung", "cho", "meo"],
+        "pets": ["thu", "cung", "cho", "meo"],
+        "xe": ["parking", "oto", "may", "dau", "do"],
+        "oto": ["xe", "do", "parking"],
+        "parking": ["xe", "do", "oto", "may"],
         "huy": ["cancel", "hoan", "coc"],
+        "cancel": ["huy", "hoan", "coc"],
         "hoan": ["refund", "coc", "huy"],
+        "refund": ["hoan", "coc", "huy"],
         "thuoc": ["smoking", "hut"],
-        "som": ["early", "check"],
-        "muon": ["late", "check"],
-        "gio": ["hourly", "check", "yen", "tinh"],
-        "coc": ["deposit", "momo", "thanh", "toan"],
+        "smoking": ["hut", "thuoc"],
+        "som": ["early", "check", "nhan"],
+        "muon": ["late", "check", "tra"],
+        "gio": ["hourly", "check", "yen", "tinh", "nhan", "tra"],
+        "hourly": ["theo", "gio"],
+        "coc": ["deposit", "momo", "thanh", "toan", "giu"],
+        "deposit": ["coc", "momo", "giu"],
+        "breakfast": ["bua", "sang"],
+        "wifi": ["internet", "mang"],
+        "suoi": ["heater", "chan", "am"],
+        "heater": ["suoi", "chan"],
+        "quiet": ["yen", "tinh", "on"],
+        "yen": ["tinh", "quiet", "on"],
+        "noi": ["quy", "chung"],
+        "quy": ["noi", "chinh", "sach"],
+        "chia": ["khoa", "mat", "boi", "thuong"],
+        "khoa": ["chia", "mat"],
+        "trung": ["tam", "ho", "xuan", "huong"],
     }
     expanded = set(tokens)
     for t in tokens:
@@ -127,16 +158,16 @@ def search_policy(query: str) -> dict:
 
     scored_sections = []
     for sec in data["policy_sections"]:
-        hay = _norm(sec["title"] + " " + sec["text"])
-        score = sum(1 for tok in expanded if tok in hay)
+        hay_words = set(_norm(sec["title"] + " " + sec["text"]).split())
+        score = sum(1 for tok in expanded if tok in hay_words)
         if score > 0:
             scored_sections.append((score, sec))
     scored_sections.sort(key=lambda x: x[0], reverse=True)
 
     scored_faqs = []
     for faq in data["faqs"]:
-        hay = _norm(faq["question"] + " " + faq["answer"])
-        score = sum(1 for tok in expanded if tok in hay)
+        hay_words = set(_norm(faq["question"] + " " + faq["answer"]).split())
+        score = sum(1 for tok in expanded if tok in hay_words)
         if score > 0:
             scored_faqs.append((score, faq))
     scored_faqs.sort(key=lambda x: x[0], reverse=True)
@@ -228,7 +259,22 @@ def check_availability(start: str, end: str, guests: int = 2, room_name: str = "
             continue
         available.append(_quote_nightly(data, r, start, end, g))
 
-    return {"start": start, "end": end, "guests": g, "available": available, "unavailable": unavailable}
+    result = {"start": start, "end": end, "guests": g, "available": available, "unavailable": unavailable}
+    if target and not available:
+        alternatives = []
+        for r in data["rooms"]:
+            if r["code"] == target["code"] or r["max_guests"] < g:
+                continue
+            has_conflict = any(
+                b["room_code"] == r["code"]
+                and b["status"] in ("Confirmed", "PendingDeposit", "Hold", "CheckedIn")
+                and _dates_overlap(s_date, e_date, datetime.date.fromisoformat(b["start"]), datetime.date.fromisoformat(b["end"]))
+                for b in data["bookings"]
+            )
+            if not has_conflict:
+                alternatives.append(_quote_nightly(data, r, start, end, g))
+        result["alternatives"] = alternatives
+    return result
 
 
 @tool

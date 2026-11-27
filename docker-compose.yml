@@ -47,6 +47,14 @@ services:
       Anthropic__Model: ${ANTHROPIC_MODEL:-claude-haiku-5-5}
       Embeddings__VoyageApiKey: ${VOYAGE_API_KEY:-}
       Zalo__WebBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
+      Smtp__Host: ${SMTP_HOST:-}
+      Smtp__Port: ${SMTP_PORT:-587}
+      Smtp__EnableSsl: ${SMTP_ENABLE_SSL:-true}
+      Smtp__Username: ${SMTP_USERNAME:-}
+      Smtp__Password: ${SMTP_PASSWORD:-}
+      Smtp__FromAddress: ${SMTP_FROM_ADDRESS:-}
+      Smtp__FromName: ${SMTP_FROM_NAME:-Stayra}
+      Smtp__WebBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
     ports:
       - "8080:8080"
     volumes:

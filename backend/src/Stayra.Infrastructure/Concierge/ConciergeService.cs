@@ -47,8 +47,10 @@ public partial class ConciergeService(
         var lang = DetectLanguage(text, conv.Language);
         conv.Language = lang;
         conv.UnreadCount++;
-        if (conv.Status == ConversationStatus.Closed) conv.Status = ConversationStatus.Bot;
+        var reopenedFromClosed = conv.Status == ConversationStatus.Closed;
+        if (reopenedFromClosed) conv.Status = ConversationStatus.Bot;
         await db.SaveChangesAsync(ct);
+        if (reopenedFromClosed) await realtime.ConversationStatusChanged(conv.Id, conv.Status.ToString());
 
         var guestMsg = await messenger.SendAsync(conv.Id, MessageRole.Guest, text, null, conv.GuestName, ct);
         var since = guestMsg.CreatedAt;
@@ -108,7 +110,7 @@ public partial class ConciergeService(
     private async Task<(string Reply, int InputTokens, int OutputTokens)> RunClaudeAsync(ToolContext ctx, CancellationToken ct)
     {
         var client = new AnthropicClient { ApiKey = config["Anthropic:ApiKey"]! };
-        var model = config["Anthropic:Model"] ?? "claude-haiku-5-5";
+        var model = string.IsNullOrWhiteSpace(config["Anthropic:Model"]) ? "claude-haiku-5-5" : config["Anthropic:Model"]!;
         var maxIterations = Math.Clamp(config.GetValue("Anthropic:MaxIterations", 6), 1, 10);
         var system = BuildSystemPrompt(ctx.Tenant, ctx.Conversation);
         var toolUnions = ConciergeTools.Definitions.Select(d => (ToolUnion)new Tool
