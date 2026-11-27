@@ -71,3 +71,10 @@ export function phone(p?: string | null) {
   const d = p.replace(/\D/g, "")
   return d.length === 10 ? `${d.slice(0, 4)} ${d.slice(4, 7)} ${d.slice(7)}` : p
 }
+
+export const vnPhone = /^(0|84)(3|5|7|8|9)\d{8}$/
+export const normalizePhone = (v: string) => v.replace(/[^\d]/g, "")
+
+export function rememberBookingPhone(code: string, phoneNumber: string) {
+  sessionStorage.setItem(`stayra.booking.${code}`, phoneNumber)
+}

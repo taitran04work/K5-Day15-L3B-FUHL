@@ -46,7 +46,7 @@ function BookingList({ items, empty, onOpen, kind }: { items: Booking[]; empty: 
               </p>
             </div>
             {kind === "out" && b.balance > 0 ? (
-              <span className="text-xs font-medium text-amber-700 tabular">{t("overview.due", { amount: money(b.balance) })}</span>
+              <span className="text-xs font-medium text-amber-700 tabular dark:text-warning">{t("overview.due", { amount: money(b.balance) })}</span>
             ) : (
               <StatusBadge status={b.status} />
             )}
@@ -88,8 +88,8 @@ export default function Overview() {
       ) : (
         <div className="space-y-6">
           {(d.pendingApprovals > 0 || d.needsAttention > 0) && (
-            <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-amber-900">
+            <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-warning/30 dark:bg-warning/10">
+              <p className="text-sm text-amber-900 dark:text-warning">
                 {[d.pendingApprovals > 0 && t("overview.pendingApprovals", { count: d.pendingApprovals }), d.needsAttention > 0 && t("overview.needsAttention", { count: d.needsAttention })]
                   .filter(Boolean)
                   .join(" · ")}

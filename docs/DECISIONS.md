@@ -73,7 +73,7 @@ Defaults chosen where the brief left room, and the places where the build delibe
 - **Lint:** `react-refresh/only-export-components` is off. Several page modules export small hooks next to their component; that only affects hot-reload granularity in development.
 - **Owner calendar** shows 14 days by default (21 and 31 are available). Drag across empty days on a room row to start a booking. The room column stays visible while scrolling the timeline on narrow screens.
 - **Responsive tables** show labeled rows in narrow containers so actions and values stay accessible without horizontal scrolling.
-- **Location** shows the address and a Google Maps link. The booking site works without loading a third-party map.
+- **Location** shows the address, an embedded Google map loaded lazily, and a link to open Google Maps in a new tab.
 - **Mobile chat** opens from the booking site header so the launcher leaves forms and booking summaries visible.
 
 ## Not done or simplified

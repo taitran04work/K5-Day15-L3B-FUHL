@@ -113,7 +113,7 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                   {data.rows.map((r) => {
                     const bad = Object.keys(r.errors).length > 0
                     return (
-                      <tr key={r.row} className={cn(bad && "bg-red-50/60")}>
+                      <tr key={r.row} className={cn(bad && "bg-red-50/60 dark:bg-destructive/10")}>
                         <td data-label={t("import.row")} className="px-3 py-2 text-muted-foreground tabular">{r.row}</td>
                         <td data-row-title className="px-3 py-2">{r.name || "–"}</td>
                         <td data-label={t("rooms.code")} className="px-3 py-2 font-mono text-xs">{r.code}</td>

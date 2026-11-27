@@ -1,17 +1,19 @@
+import { lazy, Suspense, useEffect, useState } from "react"
 import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useQuery } from "@tanstack/react-query"
-import { useEffect, useState } from "react"
 import { LanguageSwitch } from "@/components/LanguageSwitch"
 import { ErrorState, Spinner } from "@/components/common"
-import { ChatWidget } from "@/components/chat/ChatWidget"
 import { api, ApiError } from "@/lib/api"
 import { useBrand } from "@/lib/brand"
 import { cn } from "@/lib/utils"
 import type { PublicHome } from "@/lib/types"
+import { Logo } from "@/components/Logo"
+
+const ChatWidget = lazy(() => import("@/components/chat/ChatWidget").then((m) => ({ default: m.ChatWidget })))
 
 export function usePublicHome(slug: string) {
-  return useQuery({ queryKey: ["public", slug], queryFn: () => api.get<PublicHome>(`/api/public/${slug}`), staleTime: 60_000 })
+  return useQuery({ queryKey: ["public", slug], queryFn: () => api.get<PublicHome>(`/api/public/${slug}`), staleTime: 60_000, enabled: !!slug })
 }
 
 export function usePublic() {
@@ -49,7 +51,7 @@ export default function PublicLayout() {
         <div className="mx-auto max-w-lg px-4 py-24">
           {home.error instanceof ApiError && home.error.status === 404 ? (
             <div className="rounded-2xl border bg-card p-10 text-center">
-              <h1 className="font-editorial text-2xl font-medium">{t("public.notFoundTitle")}</h1>
+              <h1 className="text-2xl font-bold tracking-tight">{t("public.notFoundTitle")}</h1>
               <p className="mt-2 text-sm text-muted-foreground">{t("public.notFoundDescription")}</p>
             </div>
           ) : (
@@ -63,6 +65,14 @@ export default function PublicLayout() {
   const normalizedPath = pathname.replace(/\/+$/, "")
   const isHome = normalizedPath === `/h/${slug}`
   const overlayHero = isHome && !scrolled
+
+  // The home page is a full-screen slide deck with its own header, chat launcher and footer.
+  if (isHome)
+    return (
+      <div className="public-editorial">
+        <Outlet context={{ home: home.data, slug }} />
+      </div>
+    )
 
   const navCls = ({ isActive }: { isActive: boolean }) =>
     cn(
@@ -97,7 +107,7 @@ export default function PublicLayout() {
                 {tenant.name[0]}
               </span>
             )}
-            <span className="truncate font-editorial text-lg font-medium tracking-tight sm:text-xl">{tenant.name}</span>
+            <span className="truncate font-display text-lg font-bold tracking-tight sm:text-[1.35rem]">{tenant.name}</span>
           </Link>
 
           <nav className="flex shrink-0 items-center gap-1 sm:gap-2" aria-label={t("nav.main")}>
@@ -113,22 +123,34 @@ export default function PublicLayout() {
                 overlayHero && "border-white/30 bg-black/25 [&_button]:text-white/80 [&_button[aria-checked=true]]:bg-white [&_button[aria-checked=true]]:text-[#171614]",
               )}
             />
-            {tenant.botEnabled && <ChatWidget slug={slug} tenant={tenant} />}
+            {tenant.botEnabled && (
+              <Suspense fallback={null}>
+                <ChatWidget slug={slug} tenant={tenant} />
+              </Suspense>
+            )}
           </nav>
         </div>
       </header>
 
       <main className="flex-1">
-        <div key={pathname} className="animate-panel-enter">
-          <Outlet context={{ home: home.data, slug }} />
-        </div>
+        <Suspense
+          fallback={
+            <div className="flex min-h-[60dvh] items-center justify-center text-muted-foreground">
+              <Spinner className="size-5" />
+            </div>
+          }
+        >
+          <div key={pathname} className="stagger-enter">
+            <Outlet context={{ home: home.data, slug }} />
+          </div>
+        </Suspense>
       </main>
 
       <footer className="mt-16 border-t bg-[var(--editorial-surface-alt)] sm:mt-24">
         <div className="mx-auto max-w-[1280px] px-4 py-14 text-sm text-muted-foreground sm:px-8 sm:py-16">
           <div className="flex flex-col justify-between gap-10 md:flex-row md:items-end">
             <div className="max-w-md space-y-2">
-              <p className="font-editorial text-xl font-medium text-foreground">{tenant.name}</p>
+              <p className="font-display text-2xl font-bold text-foreground">{tenant.name}</p>
               {tenant.address && <p className="leading-relaxed">{tenant.address}</p>}
               <p className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1">
                 {tenant.phone && (
@@ -156,7 +178,7 @@ export default function PublicLayout() {
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <LanguageSwitch className="sm:hidden" />
-                <span className="text-xs tracking-wide">{t("public.poweredBy")} Stayra</span>
+                <span className="inline-flex items-center gap-1.5 text-xs tracking-wide">{t("public.poweredBy")} <Logo className="h-4" /></span>
               </div>
             </div>
           </div>

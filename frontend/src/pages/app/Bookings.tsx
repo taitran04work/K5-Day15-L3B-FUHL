@@ -112,7 +112,7 @@ export default function Bookings() {
                   <span className="block text-xs text-muted-foreground">{stayLabel(b.mode, b.startAt, b.endAt)}</span>
                   <span className="mt-1.5 flex flex-wrap gap-1.5">
                     <StatusBadge status={b.status} />
-                    {hasPendingRequest && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200">{t("bookings.needsDecision")}</span>}
+                    {hasPendingRequest && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-warning/10 dark:text-warning dark:ring-warning/25">{t("bookings.needsDecision")}</span>}
                   </span>
                 </span>
                 <span className="shrink-0 text-right text-sm tabular">
@@ -159,7 +159,7 @@ export default function Bookings() {
                     <div className="flex flex-wrap items-center gap-1.5">
                       <StatusBadge status={b.status} />
                       {hasPendingRequest && (
-                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200">{t("bookings.needsDecision")}</span>
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-warning/10 dark:text-warning dark:ring-warning/25">{t("bookings.needsDecision")}</span>
                       )}
                     </div>
                   </td>

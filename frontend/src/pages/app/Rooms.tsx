@@ -97,7 +97,7 @@ export default function Rooms() {
                       <span className="text-muted-foreground">{t("rooms.notOffered")}</span>
                     )}
                   </td>
-                  <td data-label={t("rooms.col.photos")} className={cn("px-4 py-3 text-right tabular", r.photos.length === 0 && "text-amber-700")}>{r.photos.length}</td>
+                  <td data-label={t("rooms.col.photos")} className={cn("px-4 py-3 text-right tabular", r.photos.length === 0 && "text-amber-700 dark:text-warning")}>{r.photos.length}</td>
                   <td data-label={t("rooms.col.status")} className="px-4 py-3">
                     <span className={cn("text-sm", r.isActive ? "text-foreground" : "text-muted-foreground")}>{r.isActive ? t("rooms.active") : t("rooms.hidden")}</span>
                   </td>

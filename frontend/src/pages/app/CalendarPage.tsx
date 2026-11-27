@@ -20,12 +20,12 @@ interface CalendarData {
 }
 
 const tone: Record<string, string> = {
-  Hold: "bg-amber-100 text-amber-900 border-amber-300 border-dashed",
-  PendingDeposit: "bg-amber-100 text-amber-900 border-amber-300",
+  Hold: "bg-amber-100 text-amber-900 border-amber-300 border-dashed dark:border-warning/40 dark:bg-warning/15 dark:text-warning",
+  PendingDeposit: "bg-amber-100 text-amber-900 border-amber-300 dark:border-warning/40 dark:bg-warning/15 dark:text-warning",
   Confirmed: "bg-brand text-brand-foreground border-transparent",
   CheckedIn: "bg-foreground text-background border-transparent",
   CheckedOut: "bg-muted text-muted-foreground border-border",
-  NoShow: "bg-red-50 text-red-800 border-red-200",
+  NoShow: "bg-red-50 text-red-800 border-red-200 dark:border-destructive/30 dark:bg-destructive/15 dark:text-destructive",
 }
 
 function localHour(iso: string) {

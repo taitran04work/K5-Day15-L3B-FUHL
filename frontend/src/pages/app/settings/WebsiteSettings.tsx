@@ -12,13 +12,13 @@ import { ErrorState, Field, PageHeader, Section, Spinner, useErrorMessage, useFi
 import { PhotoTile } from "@/components/booking/BookingParts"
 import { api } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
-import { applyBrand } from "@/lib/brand"
+import { brandStyle, isBrandColor } from "@/lib/brand"
 import { resizeToWebp } from "@/lib/image"
 import { cn } from "@/lib/utils"
 import type { TenantSettings } from "@/lib/types"
 import { useSettings } from "./BotSettings"
 
-const SWATCHES = ["#1F5F4A", "#111111", "#2F4858", "#5B4636", "#7A3B3B", "#3D4F7D", "#4B5D3A"]
+const SWATCHES = ["#1F5F4A", "#111111", "#B83A0B", "#2F4858", "#5B4636", "#7A3B3B", "#3D4F7D", "#4B5D3A"]
 
 export default function WebsiteSettings() {
   const { t } = useTranslation()
@@ -65,6 +65,9 @@ export default function WebsiteSettings() {
   if (settings.error) return <Page narrow><ErrorState error={settings.error} onRetry={() => void settings.refetch()} /></Page>
   if (!s) return <Page narrow><Skeleton className="h-8 w-48" /><Skeleton className="mt-6 h-64 w-full" /></Page>
   const set = <K extends keyof TenantSettings>(k: K, v: TenantSettings[K]) => setS({ ...s, [k]: v })
+  const validColor = isBrandColor(s.accentColor)
+  const colorError = validColor ? fieldError(save.error, "accentColor") : t("validation.color_format")
+  const preview = brandStyle(validColor ? s.accentColor : settings.data?.accentColor)
 
   return (
     <Page narrow>
@@ -78,7 +81,7 @@ export default function WebsiteSettings() {
                 {t("website.view")} <ExternalLink />
               </a>
             </Button>
-            <Button onClick={() => save.mutate()} disabled={save.isPending}>
+            <Button onClick={() => save.mutate()} disabled={save.isPending || !validColor}>
               {save.isPending && <Spinner />} {t("common.saveChanges")}
             </Button>
           </>
@@ -89,8 +92,8 @@ export default function WebsiteSettings() {
           <div className="grid gap-6 sm:grid-cols-[160px_1fr]">
             <div>
               <p className="mb-2 text-sm font-medium">{t("website.logo")}</p>
-              <button type="button" onClick={() => logoRef.current?.click()} className="group relative flex size-28 items-center justify-center overflow-hidden rounded-xl border border-dashed hover:bg-muted/40">
-                {s.logoUrl ? <img src={s.logoUrl} alt="" className="size-full object-cover" /> : <ImagePlus className="size-5 text-muted-foreground" />}
+              <button type="button" aria-label={t("website.logo")} onClick={() => logoRef.current?.click()} className="flex size-32 items-center justify-center overflow-hidden rounded-xl border border-dashed hover:bg-muted/40">
+                {s.logoUrl ? <img src={s.logoUrl} alt="" className="size-full object-contain p-2" /> : <ImagePlus className="size-5 text-muted-foreground" />}
               </button>
               <input ref={logoRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate({ kind: "logo", file: f }); e.target.value = "" }} />
             </div>
@@ -141,18 +144,19 @@ export default function WebsiteSettings() {
               <button
                 key={c}
                 type="button"
-                onClick={() => { set("accentColor", c); applyBrand(c) }}
-                className={cn("size-8 rounded-full ring-offset-2 transition", s.accentColor.toLowerCase() === c.toLowerCase() && "ring-2 ring-foreground")}
+                onClick={() => set("accentColor", c)}
+                className={cn("size-8 rounded-full border border-input ring-offset-2 ring-offset-card transition", s.accentColor.toLowerCase() === c.toLowerCase() && "ring-2 ring-foreground")}
                 style={{ background: c }}
                 aria-label={c}
                 aria-pressed={s.accentColor.toLowerCase() === c.toLowerCase()}
               />
             ))}
-            <Input value={s.accentColor} onChange={(e) => { set("accentColor", e.target.value); if (/^#[0-9a-f]{6}$/i.test(e.target.value)) applyBrand(e.target.value) }} className="ml-2 w-28 font-mono text-xs" aria-label={t("website.customColor")} />
+            <input type="color" value={preview["--brand"]} onChange={(e) => set("accentColor", e.target.value)} className="h-9 w-10 cursor-pointer rounded-md border border-input bg-background p-1" aria-label={t("website.colorPicker")} />
+            <Input value={s.accentColor} onChange={(e) => set("accentColor", e.target.value)} className="w-28 font-mono text-xs" aria-label={t("website.customColor")} aria-invalid={!!colorError} aria-describedby={colorError ? "website-color-error" : undefined} />
           </div>
-          {fieldError(save.error, "accentColor") && <p className="mt-2 text-xs text-destructive">{fieldError(save.error, "accentColor")}</p>}
-          <div className="mt-5 flex items-center gap-3 rounded-lg border p-4">
-            <Button size="sm">{t("website.previewButton")}</Button>
+          {colorError && <p id="website-color-error" className="mt-2 text-xs text-destructive">{colorError}</p>}
+          <div className="website-color-preview mt-5 flex flex-wrap items-center gap-3 rounded-lg border bg-background p-4" style={preview}>
+            <span className="inline-flex h-8 items-center rounded-md border border-black/10 bg-primary px-3 text-sm font-medium text-primary-foreground">{t("website.previewButton")}</span>
             <span className="text-sm text-muted-foreground">{t("website.previewText")}</span>
           </div>
         </Section>
