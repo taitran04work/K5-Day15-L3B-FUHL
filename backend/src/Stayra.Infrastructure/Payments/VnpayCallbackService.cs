@@ -79,6 +79,7 @@ public class VnpayCallbackService(
         var open = await db.Payments.IgnoreQueryFilters()
             .Where(p => p.Status == PaymentStatus.Created && p.Provider == PaymentProvider.VNPay && p.PayUrl != null
                         && p.CreatedAt < now.AddMinutes(-1) && p.CreatedAt > now.AddDays(-2))
+            .OrderBy(p => p.CreatedAt)
             .Take(50).ToListAsync(ct);
         var changed = 0;
         foreach (var p in open)
