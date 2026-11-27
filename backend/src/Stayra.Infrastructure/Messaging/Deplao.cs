@@ -309,7 +309,7 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             var resp = await http.SendAsync(req, ct);
             var raw = await resp.Content.ReadAsStringAsync(ct);
-            if ((int)resp.StatusCode == 403) return (false, null, true, raw);
+            if ((int)resp.StatusCode is 401 or 403) return (false, null, true, raw);
             if (!resp.IsSuccessStatusCode) return (false, null, false, $"HTTP {(int)resp.StatusCode}: {raw}");
             var json = JsonSerializer.Deserialize<JsonElement>(raw);
             var payload = json.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d : json;

@@ -434,6 +434,16 @@ public class DeplaoChannelsController(
         if (string.IsNullOrWhiteSpace(apiKey))
             throw AppException.BadRequest("deplao_not_connected", "Deplao gateway is not ready. Check DEPLAO_WEB_PASSWORD.");
         var (ok, accounts, error) = await deplaoClient.GetAccountsAsync(baseUrl, apiKey, HttpContext.RequestAborted);
+        if (!ok && string.IsNullOrWhiteSpace(req?.ApiKey) && (error?.StartsWith("HTTP 401:") == true || error?.StartsWith("HTTP 403:") == true))
+        {
+            t.DeplaoApiKeyEnc = null;
+            await Db.SaveChangesAsync();
+            if (await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted))
+            {
+                apiKey = deplaoClient.ResolveApiKey(t) ?? apiKey;
+                (ok, accounts, error) = await deplaoClient.GetAccountsAsync(baseUrl, apiKey, HttpContext.RequestAborted);
+            }
+        }
         if (ok)
         {
             var takenByOthers = await Db.ChannelConnections.IgnoreQueryFilters()
