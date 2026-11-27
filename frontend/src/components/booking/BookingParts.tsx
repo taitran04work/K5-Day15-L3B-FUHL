@@ -67,7 +67,7 @@ export function Countdown({ until, onExpire }: { until: string; onExpire?: () =>
 }
 
 /**
- * MoMo payment card: amount, QR (scan with MoMo), "Pay with MoMo" button, live status polling,
+ * VNPay payment card: amount, QR (scan to open VNPay), "Pay with VNPay" button, live status polling,
  * and a "Simulate payment" button in development so the demo never depends on the network.
  */
 export function PaymentCard({ slug, payment, onPaid, className }: { slug: string; payment: Payment; onPaid?: (bookingStatus: BookingStatus) => void; className?: string }) {
@@ -127,7 +127,7 @@ export function PaymentCard({ slug, payment, onPaid, className }: { slug: string
             {current.payUrl && (
               <Button asChild className="w-full">
                 <a href={current.payUrl} target="_blank" rel="noreferrer">
-                  {t("payment.payWithMomo")} <ExternalLink />
+                  {t("payment.payWithVnpay")} <ExternalLink />
                 </a>
               </Button>
             )}

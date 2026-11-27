@@ -6,6 +6,8 @@ import { ExternalLink, ImagePlus, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Page } from "@/components/layout/AppShell"
@@ -54,6 +56,15 @@ export default function WebsiteSettings() {
   const coverRef = useRef<HTMLInputElement>(null)
   const bgRef = useRef<HTMLInputElement>(null)
   const [bgTarget, setBgTarget] = useState<BgKind | null>(null)
+  const [smtpDraft, setSmtpDraft] = useState<{
+    host?: string
+    port?: number
+    username?: string
+    password: string
+    fromEmail?: string
+    fromName?: string
+    enableSsl?: boolean
+  }>({ password: "" })
   // what guests actually see behind each slide (auto picks included), from the same data the home page uses
   const publicHome = usePublicHome(settings.data?.slug ?? "")
   const backdrops = useMemo(() => (publicHome.data ? homeBackdrops(publicHome.data) : null), [publicHome.data])
@@ -82,6 +93,25 @@ export default function WebsiteSettings() {
   const removeImage = useMutation({
     mutationFn: (kind: ImageKind) => api.del<TenantSettings>(`/api/app/settings/images/${kind}`),
     onSuccess: (res) => onImages(res),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const saveEmail = useMutation({
+    mutationFn: (removeConfig: boolean) =>
+      api.put<TenantSettings>("/api/app/settings/email", {
+        host: removeConfig ? null : (smtpDraft.host ?? s?.smtpHost ?? "smtp.gmail.com"),
+        port: removeConfig ? null : (smtpDraft.port ?? s?.smtpPort ?? 587),
+        username: removeConfig ? null : (smtpDraft.username ?? s?.smtpUsername ?? ""),
+        password: removeConfig ? null : (smtpDraft.password || null),
+        fromEmail: removeConfig ? null : (smtpDraft.fromEmail ?? s?.smtpFromEmail ?? null),
+        fromName: removeConfig ? null : (smtpDraft.fromName ?? s?.smtpFromName ?? null),
+        enableSsl: removeConfig ? true : (smtpDraft.enableSsl ?? s?.smtpEnableSsl ?? true),
+        removeConfig,
+      }),
+    onSuccess: (res, removeConfig) => {
+      qc.setQueryData<TenantSettings>(["settings"], res)
+      setSmtpDraft({ password: "" })
+      toast.success(t(removeConfig ? "website.emailRemoved" : "website.emailSaved"))
+    },
     onError: (e) => toast.error(errorMessage(e)),
   })
   // Image updates use the saved settings. Form edits are held separately until Save.
@@ -119,16 +149,6 @@ export default function WebsiteSettings() {
         }
       />
       <div className="space-y-6">
-        <Section title={t("website.display")}>
-          <Field label={t("website.guestLanguage")} htmlFor="guest-language" hint={t("website.guestLanguageHint")} error={fieldError(save.error, "defaultLanguage")}>
-            <Select value={getLanguageOption(s.defaultLanguage).value} onValueChange={(v) => set("defaultLanguage", v)}>
-              <SelectTrigger id="guest-language" className="w-full sm:w-64"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {languageOptions.map(({ value, short }) => <SelectItem key={value} value={value}>{short}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </Field>
-        </Section>
         <Section title={t("website.images")}>
           <div className="grid gap-6 sm:grid-cols-[160px_1fr]">
             <div>
@@ -219,9 +239,19 @@ export default function WebsiteSettings() {
 
         <Section title={t("website.details")}>
           <div className="space-y-4">
-            <Field label={t("website.name")} error={fieldError(save.error, "name")}>
-              <Input value={s.name} onChange={(e) => set("name", e.target.value)} />
-            </Field>
+            <div className="grid gap-4 sm:grid-cols-[1fr_200px]">
+              <Field label={t("website.name")} error={fieldError(save.error, "name")}>
+                <Input value={s.name} onChange={(e) => set("name", e.target.value)} />
+              </Field>
+              <Field label={t("website.guestLanguage")} htmlFor="guest-language" error={fieldError(save.error, "defaultLanguage")}>
+                <Select value={getLanguageOption(s.defaultLanguage).value} onValueChange={(v) => set("defaultLanguage", v)}>
+                  <SelectTrigger id="guest-language" className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {languageOptions.map(({ value, short }) => <SelectItem key={value} value={value}>{short}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
             <Field label={t("website.intro")} hint={t("website.introHint")}>
               <Textarea rows={4} value={s.description ?? ""} onChange={(e) => set("description", e.target.value)} />
             </Field>
@@ -277,6 +307,105 @@ export default function WebsiteSettings() {
           <div className="website-color-preview mt-5 flex flex-wrap items-center gap-3 rounded-lg border bg-background p-4" style={preview}>
             <span className="inline-flex h-8 items-center rounded-md border border-black/10 bg-primary px-3 text-sm font-medium text-primary-foreground">{t("website.previewButton")}</span>
             <span className="text-sm text-muted-foreground">{t("website.previewText")}</span>
+          </div>
+        </Section>
+
+        <Section
+          title={t("website.emailConfig")}
+          description={t("website.emailConfigHint")}
+          actions={
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-0.5 text-xs font-medium",
+                s.smtpCustom ? "bg-brand-soft text-brand" : "bg-muted text-muted-foreground",
+              )}
+            >
+              {t(s.smtpCustom ? "website.emailStatusCustom" : "website.emailStatusDefault")}
+            </span>
+          }
+        >
+          <div className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-[1fr_140px]">
+              <Field label={t("website.smtpHost")} htmlFor="smtp-host">
+                <Input
+                  id="smtp-host"
+                  value={smtpDraft.host ?? s.smtpHost ?? "smtp.gmail.com"}
+                  onChange={(e) => setSmtpDraft((d) => ({ ...d, host: e.target.value }))}
+                  placeholder="smtp.gmail.com"
+                />
+              </Field>
+              <Field label={t("website.smtpPort")} htmlFor="smtp-port">
+                <Input
+                  id="smtp-port"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={smtpDraft.port ?? s.smtpPort ?? 587}
+                  onChange={(e) => setSmtpDraft((d) => ({ ...d, port: e.target.value === "" ? 587 : Number(e.target.value) }))}
+                  className="tabular"
+                />
+              </Field>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label={t("website.smtpUsername")} htmlFor="smtp-user">
+                <Input
+                  id="smtp-user"
+                  type="email"
+                  value={smtpDraft.username ?? s.smtpUsername ?? ""}
+                  onChange={(e) => setSmtpDraft((d) => ({ ...d, username: e.target.value }))}
+                  placeholder="homestay@gmail.com"
+                />
+              </Field>
+              <Field label={t("website.smtpPassword")} htmlFor="smtp-pass" hint={s.smtpCustom ? t("website.smtpPasswordSavedHint") : undefined}>
+                <Input
+                  id="smtp-pass"
+                  type="password"
+                  autoComplete="new-password"
+                  value={smtpDraft.password}
+                  onChange={(e) => setSmtpDraft((d) => ({ ...d, password: e.target.value }))}
+                  placeholder={s.smtpCustom ? "••••••••••••••••" : ""}
+                />
+              </Field>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label={t("website.smtpFromEmail")} htmlFor="smtp-from-email" optional>
+                <Input
+                  id="smtp-from-email"
+                  type="email"
+                  value={smtpDraft.fromEmail ?? s.smtpFromEmail ?? ""}
+                  onChange={(e) => setSmtpDraft((d) => ({ ...d, fromEmail: e.target.value }))}
+                  placeholder={smtpDraft.username ?? s.smtpUsername ?? "homestay@gmail.com"}
+                />
+              </Field>
+              <Field label={t("website.smtpFromName")} htmlFor="smtp-from-name" optional>
+                <Input
+                  id="smtp-from-name"
+                  value={smtpDraft.fromName ?? s.smtpFromName ?? ""}
+                  onChange={(e) => setSmtpDraft((d) => ({ ...d, fromName: e.target.value }))}
+                  placeholder={s.name}
+                />
+              </Field>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-xl border p-3.5">
+              <Label htmlFor="smtp-ssl" className="flex-1 cursor-pointer text-sm font-medium">
+                {t("website.smtpSsl")}
+              </Label>
+              <Switch
+                id="smtp-ssl"
+                checked={smtpDraft.enableSsl ?? s.smtpEnableSsl ?? true}
+                onCheckedChange={(v) => setSmtpDraft((d) => ({ ...d, enableSsl: v }))}
+              />
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+              {s.smtpCustom && (
+                <Button variant="outline" onClick={() => saveEmail.mutate(true)} disabled={saveEmail.isPending}>
+                  {t("website.removeEmail")}
+                </Button>
+              )}
+              <Button onClick={() => saveEmail.mutate(false)} disabled={saveEmail.isPending}>
+                {saveEmail.isPending && <Spinner />} {t("website.saveEmail")}
+              </Button>
+            </div>
           </div>
         </Section>
       </div>

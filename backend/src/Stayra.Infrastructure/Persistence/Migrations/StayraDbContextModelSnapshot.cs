@@ -855,15 +855,6 @@ namespace Stayra.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
-                    b.Property<string>("MomoAccessKeyEnc")
-                        .HasColumnType("text");
-
-                    b.Property<string>("MomoPartnerCode")
-                        .HasColumnType("text");
-
-                    b.Property<string>("MomoSecretKeyEnc")
-                        .HasColumnType("text");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -891,6 +882,27 @@ namespace Stayra.Infrastructure.Persistence.Migrations
                         .HasMaxLength(80)
                         .HasColumnType("character varying(80)");
 
+                    b.Property<bool>("SmtpEnableSsl")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("SmtpFromEmail")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SmtpFromName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SmtpHost")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SmtpPasswordEnc")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("SmtpPort")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SmtpUsername")
+                        .HasColumnType("text");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -898,6 +910,12 @@ namespace Stayra.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("TimeZone")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("VnpayHashSecretEnc")
+                        .HasColumnType("text");
+
+                    b.Property<string>("VnpayTmnCode")
                         .HasColumnType("text");
 
                     b.Property<string>("ZaloAccessTokenEnc")

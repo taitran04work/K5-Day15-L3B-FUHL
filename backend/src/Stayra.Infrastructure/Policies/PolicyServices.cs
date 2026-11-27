@@ -202,7 +202,7 @@ public class PolicyJobs(
     IRealtimeNotifier realtime,
     ILogger<PolicyJobs> log)
 {
-    public async Task Ingest(Guid documentId, bool extract)
+    public async Task Ingest(Guid documentId, bool extract, string? language = null)
     {
         tenantContext.Set(null, bypass: true);
         var doc = await db.PolicyDocuments.FirstOrDefaultAsync(d => d.Id == documentId);
@@ -221,8 +221,11 @@ public class PolicyJobs(
             await stream.CopyToAsync(ms);
             var pages = PdfText.Extract(ms.ToArray());
             doc.PageCount = pages.Count;
+            var vi = GuestText.IsVietnamese(language);
             if (pages.Sum(p => p.Text.Length) < 40)
-                throw new InvalidOperationException("This PDF has no readable text (it may be a scanned image).");
+                throw new InvalidOperationException(vi
+                    ? "PDF này không có văn bản đọc được (có thể là ảnh scan)."
+                    : "This PDF has no readable text (it may be a scanned image).");
 
             var chunks = PdfText.Chunk(pages);
             doc.StatusDetail = embeddings.IsEnabled ? "Indexing for search" : "Indexing for keyword search";
@@ -243,7 +246,7 @@ public class PolicyJobs(
                 doc.StatusDetail = "Reading the cancellation rules";
                 await db.SaveChangesAsync();
                 await realtime.DocumentChanged(doc.TenantId, doc.Id);
-                await extraction.ExtractAndSaveDraftAsync(doc, pages);
+                await extraction.ExtractAndSaveDraftAsync(doc, pages, language);
             }
 
             doc.Status = DocumentStatus.Ready;
@@ -254,7 +257,9 @@ public class PolicyJobs(
         {
             log.LogWarning(ex, "Policy ingestion failed for {Doc}", documentId);
             doc.Status = DocumentStatus.Failed;
-            doc.StatusDetail = ex is InvalidOperationException ? ex.Message : "We couldn't read this PDF. Please try another file.";
+            doc.StatusDetail = ex is InvalidOperationException ? ex.Message
+                : GuestText.IsVietnamese(language) ? "Không đọc được tệp PDF này. Vui lòng thử tệp khác."
+                : "We couldn't read this PDF. Please try another file.";
             await db.SaveChangesAsync();
         }
         await realtime.DocumentChanged(doc.TenantId, doc.Id);
@@ -265,7 +270,7 @@ public class PolicySeedHook(IJobScheduler jobs) : ISeedHook
 {
     public Task AfterSeedAsync(Tenant pine, Tenant sea, PolicyDocument pineDoc)
     {
-        jobs.Enqueue<PolicyJobs>(j => j.Ingest(pineDoc.Id, false));
+        jobs.Enqueue<PolicyJobs>(j => j.Ingest(pineDoc.Id, false, null));
         return Task.CompletedTask;
     }
 }

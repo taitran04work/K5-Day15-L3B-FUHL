@@ -77,9 +77,9 @@ public class GuestMessageTests(PostgresFixture fixture)
 
         ZaloAdapter.RenderCardsAsText(cards, tenant, "https://stayra.example.test", "vi")
             .Should().Contain("Đặt phòng STR-ABC234").And.Contain("đã xác nhận")
-            .And.Contain("Thanh toán 1.250.000 ₫ qua MoMo: https://pay.example.test");
+            .And.Contain("Thanh toán 1.250.000 ₫ qua VNPay: https://pay.example.test");
         ZaloAdapter.RenderCardsAsText(cards, tenant, "https://stayra.example.test")
             .Should().Contain("Booking STR-ABC234").And.Contain("confirmed")
-            .And.Contain("Pay ₫1,250,000 with MoMo: https://pay.example.test");
+            .And.Contain("Pay ₫1,250,000 with VNPay: https://pay.example.test");
     }
 }

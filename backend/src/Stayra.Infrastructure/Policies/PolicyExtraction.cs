@@ -83,55 +83,77 @@ public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, Au
     }
     """;
 
-    private const string Instructions = """
-    You extract a homestay's cancellation/refund rules from its policy document into JSON.
-    Rules:
-    - Each rule is a window measured in hours before the check-in time: minHoursBeforeCheckIn (inclusive) to maxHoursBeforeCheckIn (exclusive, null = no upper limit). Convert days to hours (1 day = 24 hours).
-    - refundPercent is 0-100. appliesTo is "Deposit" when the text refunds the deposit, "Total" when it refunds the total/booking amount.
-    - label is a short plain-English description such as "More than 7 days before".
-    - sourceQuote must be the exact sentence from the document; sourcePage is its page number (pages are marked as [Page N]).
-    - noShowRefundPercent: refund for no-shows (0 if not refundable or not mentioned).
-    - notes: other refund-relevant conditions in one or two sentences (empty string if none).
-    - ambiguities: anything unclear, contradictory, or windows not covered (e.g. "24–72 hours is not mentioned").
-    - suggestedFaqs: 3-6 short guest questions with answers taken only from the document (house rules, breakfast, parking, check-in times...).
-    Never invent rules that are not in the text.
-    """;
+    private static string BuildInstructions(string language)
+    {
+        var vi = GuestText.IsVietnamese(language);
+        var outLang = vi ? "Vietnamese" : "English";
+        var labelExample = vi ? "\"Hơn 7 ngày trước giờ nhận phòng\"" : "\"More than 7 days before\"";
+        var ambExample = vi ? "\"Chưa nêu rõ mốc 24–72 giờ trước giờ nhận phòng\"" : "\"24–72 hours is not mentioned\"";
+        return $$"""
+        You extract a homestay's cancellation/refund rules from its policy document into JSON.
+        Output language: Write label, notes, ambiguities, and every suggestedFaqs question and answer in natural {{outLang}}, regardless of the source document's language.
+        Rules:
+        - Each rule is a window measured in hours before the check-in time: minHoursBeforeCheckIn (inclusive) to maxHoursBeforeCheckIn (exclusive, null = no upper limit). Convert days to hours (1 day = 24 hours).
+        - refundPercent is 0-100. appliesTo is "Deposit" when the text refunds the deposit, "Total" when it refunds the total/booking amount.
+        - label is a short plain-{{outLang}} description such as {{labelExample}}.
+        - sourceQuote must be the exact sentence copied verbatim from the document (do not translate sourceQuote); sourcePage is its page number (pages are marked as [Page N]).
+        - noShowRefundPercent: refund for no-shows (0 if not refundable or not mentioned).
+        - notes: other refund-relevant conditions in one or two {{outLang}} sentences (empty string if none).
+        - ambiguities: anything unclear, contradictory, or windows not covered, written in {{outLang}} (e.g. {{ambExample}}).
+        - suggestedFaqs: 3-6 short guest questions with answers in {{outLang}}, taken only from the document (house rules, breakfast, parking, check-in times...).
+        Never invent rules that are not in the text.
+        """;
+    }
 
-    public async Task<RefundPolicy> ExtractAndSaveDraftAsync(PolicyDocument doc, IReadOnlyList<PageText> pages, CancellationToken ct = default)
+    public async Task<RefundPolicy?> ExtractAndSaveDraftAsync(PolicyDocument doc, IReadOnlyList<PageText> pages, string? language = null, CancellationToken ct = default)
     {
         // the homestay's own key + model; no key -> the heuristic extractor
         var tenant = await db.Tenants.IgnoreQueryFilters().FirstAsync(t => t.Id == doc.TenantId, ct);
+        var lang = GuestText.IsVietnamese(language ?? tenant.DefaultLanguage) ? "vi" : "en";
         var client = ai.Client(tenant);
         var aiUsed = client is not null;
         ExtractedPolicy extracted;
         if (client is not null)
         {
-            try { extracted = await ExtractWithClaudeAsync(client, ai.Model(tenant), pages, ct); }
+            try { extracted = await ExtractWithClaudeAsync(client, ai.Model(tenant), pages, lang, ct); }
             catch (Exception ex)
             {
                 log.LogWarning(ex, "Claude extraction failed for {Doc}; using heuristic extractor", doc.Id);
-                extracted = Heuristic(pages);
-                extracted.Ambiguities.Insert(0, "The AI extractor was unavailable, so these rules were read with a simpler method. Please double-check them.");
+                extracted = Heuristic(pages, lang);
+                extracted.Ambiguities.Insert(0, lang == "vi"
+                    ? "Bộ trích xuất AI tạm thời không khả dụng nên hệ thống đọc quy tắc theo cách đơn giản. Vui lòng kiểm tra kỹ lại."
+                    : "The AI extractor was unavailable, so these rules were read with a simpler method. Please double-check them.");
             }
         }
-        else extracted = Heuristic(pages);
+        else extracted = Heuristic(pages, lang);
 
-        var rules = Validate(extracted);
-        var version = (await db.RefundPolicies.Where(p => p.TenantId == doc.TenantId).MaxAsync(p => (int?)p.Version) ?? 0) + 1;
-        var policy = new RefundPolicy
+        var rules = Validate(extracted, lang);
+        await db.RefundPolicies
+            .Where(p => p.TenantId == doc.TenantId && p.SourceDocumentId == doc.Id && p.Status == RefundPolicyStatus.Draft)
+            .ExecuteDeleteAsync(ct);
+        await db.FaqItems
+            .Where(f => f.TenantId == doc.TenantId && f.SourceDocumentId == doc.Id && f.Status == FaqStatus.Suggested)
+            .ExecuteDeleteAsync(ct);
+
+        RefundPolicy? policy = null;
+        if (rules.Count > 0)
         {
-            TenantId = doc.TenantId,
-            Status = RefundPolicyStatus.Draft,
-            Version = version,
-            SourceDocumentId = doc.Id,
-            Rules = rules,
-            NoShowRefundPercent = Math.Clamp(extracted.NoShowRefundPercent, 0, 100),
-            Notes = string.IsNullOrWhiteSpace(extracted.Notes) ? null : extracted.Notes.Trim(),
-            Ambiguities = extracted.Ambiguities.Where(a => !string.IsNullOrWhiteSpace(a)).Distinct().ToList(),
-        };
-        foreach (var w in RefundEngine.Analyze(rules).Where(w => w.Code is "gap" or "overlap"))
-            if (!policy.Ambiguities.Contains(w.Message)) policy.Ambiguities.Add(w.Message);
-        db.RefundPolicies.Add(policy);
+            var version = (await db.RefundPolicies.Where(p => p.TenantId == doc.TenantId).MaxAsync(p => (int?)p.Version) ?? 0) + 1;
+            policy = new RefundPolicy
+            {
+                TenantId = doc.TenantId,
+                Status = RefundPolicyStatus.Draft,
+                Version = version,
+                SourceDocumentId = doc.Id,
+                Rules = rules,
+                NoShowRefundPercent = Math.Clamp(extracted.NoShowRefundPercent, 0, 100),
+                Notes = string.IsNullOrWhiteSpace(extracted.Notes) ? null : extracted.Notes.Trim(),
+                Ambiguities = extracted.Ambiguities.Where(a => !string.IsNullOrWhiteSpace(a)).Distinct().ToList(),
+            };
+            foreach (var w in RefundEngine.Analyze(rules, lang).Where(w => w.Code is "gap" or "overlap"))
+                if (!policy.Ambiguities.Contains(w.Message)) policy.Ambiguities.Add(w.Message);
+            db.RefundPolicies.Add(policy);
+        }
 
         var existing = (await db.FaqItems.Where(f => f.TenantId == doc.TenantId).Select(f => f.Question).ToListAsync(ct))
             .Select(q => q.ToLowerInvariant()).ToHashSet();
@@ -145,12 +167,12 @@ public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, Au
                 SourceDocumentId = doc.Id, SortOrder = ++order,
             });
         }
-        audit.Log(doc.TenantId, Actors.System, "policy.extracted", nameof(RefundPolicy), policy.Id, new { doc.FileName, Rules = rules.Count, Ai = aiUsed });
+        audit.Log(doc.TenantId, Actors.System, "policy.extracted", policy is null ? nameof(PolicyDocument) : nameof(RefundPolicy), policy?.Id ?? doc.Id, new { doc.FileName, Rules = rules.Count, Ai = aiUsed, Language = lang });
         await db.SaveChangesAsync(ct);
         return policy;
     }
 
-    private async Task<ExtractedPolicy> ExtractWithClaudeAsync(AnthropicClient client, string model, IReadOnlyList<PageText> pages, CancellationToken ct)
+    private async Task<ExtractedPolicy> ExtractWithClaudeAsync(AnthropicClient client, string model, IReadOnlyList<PageText> pages, string language, CancellationToken ct)
     {
         var schema = JsonDocument.Parse(SchemaJson).RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
         var text = string.Join("\n\n", pages.Select(p => $"[Page {p.Page}]\n{p.Text}"));
@@ -158,7 +180,7 @@ public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, Au
         {
             Model = model,
             MaxTokens = 16000,
-            System = Instructions,
+            System = BuildInstructions(language),
             Messages = [new UserMessageParam { Content = $"<policy_document>\n{text}\n</policy_document>" }],
             OutputConfig = new OutputConfig { Effort = Effort.Medium, Format = new JsonOutputFormat { Schema = schema } },
         }, ct);
@@ -168,7 +190,7 @@ public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, Au
     }
 
     /// <summary>Server-side validation of extracted rules: clamps values, drops malformed rules, normalizes labels.</summary>
-    public static List<RefundRule> Validate(ExtractedPolicy p)
+    public static List<RefundRule> Validate(ExtractedPolicy p, string language = "en")
     {
         var rules = new List<RefundRule>();
         foreach (var r in p.Rules)
@@ -181,7 +203,7 @@ public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, Au
                 MaxHoursBeforeCheckIn = r.MaxHoursBeforeCheckIn,
                 RefundPercent = Math.Clamp(Math.Round(r.RefundPercent, 1), 0, 100),
                 AppliesTo = string.Equals(r.AppliesTo, "Total", StringComparison.OrdinalIgnoreCase) ? RefundAppliesTo.Total : RefundAppliesTo.Deposit,
-                Label = string.IsNullOrWhiteSpace(r.Label) ? LabelFor(r.MinHoursBeforeCheckIn, r.MaxHoursBeforeCheckIn) : r.Label.Trim(),
+                Label = string.IsNullOrWhiteSpace(r.Label) ? LabelFor(r.MinHoursBeforeCheckIn, r.MaxHoursBeforeCheckIn, language) : r.Label.Trim(),
                 SourceQuote = string.IsNullOrWhiteSpace(r.SourceQuote) ? null : r.SourceQuote.Trim(),
                 SourcePage = r.SourcePage > 0 ? r.SourcePage : null,
             });
@@ -189,8 +211,16 @@ public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, Au
         return rules.OrderByDescending(r => r.MinHoursBeforeCheckIn).ToList();
     }
 
-    public static string LabelFor(int min, int? max)
+    public static string LabelFor(int min, int? max, string language = "en")
     {
+        if (GuestText.IsVietnamese(language))
+        {
+            static string HV(int h) => h >= 168 && h % 24 == 0 ? $"{h / 24} ngày" : $"{h} giờ";
+            if (max is null) return $"Hơn {HV(min)} trước";
+            if (min == 0) return $"Dưới {HV(max.Value)} trước";
+            if (min % 24 == 0 && max % 24 == 0 && min >= 24) return $"Từ {min / 24} đến {max / 24} ngày trước";
+            return $"Từ {HV(min)} đến {HV(max.Value)} trước";
+        }
         static string H(int h) => h >= 168 && h % 24 == 0 ? $"{h / 24} days" : $"{h} hours";
         if (max is null) return $"More than {H(min)} before";
         if (min == 0) return $"Less than {H(max.Value)} before";
@@ -204,8 +234,9 @@ public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, Au
     private static readonly Regex Num = new(@"(\d+(?:[.,]\d+)?)\s*(days?|hours?|ngày|giờ|h\b)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex Pct = new(@"(\d{1,3}(?:[.,]\d+)?)\s*%", RegexOptions.Compiled);
 
-    public static ExtractedPolicy Heuristic(IReadOnlyList<PageText> pages)
+    public static ExtractedPolicy Heuristic(IReadOnlyList<PageText> pages, string language = "en")
     {
+        var vi = GuestText.IsVietnamese(language);
         var result = new ExtractedPolicy();
         var sentences = pages.SelectMany(p => SplitSentences(p.Text).Select(s => (p.Page, Text: s))).ToList();
 
@@ -230,27 +261,28 @@ public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, Au
             {
                 var vals = explicitHours.Count >= 2 ? explicitHours : hours;
                 // "between 3 and 7 days (72 to 168 hours)" -> numbers without units count too.
-                var bare = Regex.Match(lower, @"between\s+(\d+)\s+and\s+(\d+)\s*(days?|hours?)");
+                var bare = Regex.Match(lower, @"(?:between|từ)\s+(\d+)\s+(?:and|đến|-|–)\s+(\d+)\s*(days?|hours?|ngày|giờ|h\b)");
                 if (explicitHours.Count < 2 && bare.Success)
                 {
-                    var mult = bare.Groups[3].Value.StartsWith("day") ? 24 : 1;
+                    var u = bare.Groups[3].Value.ToLowerInvariant();
+                    var mult = u.StartsWith("day") || u == "ngày" ? 24 : 1;
                     vals = [int.Parse(bare.Groups[1].Value) * mult, int.Parse(bare.Groups[2].Value) * mult];
                 }
-                var paren = Regex.Match(lower, @"\((\d+)\s*(?:to|-|–)\s*(\d+)\s*hours?\)");
+                var paren = Regex.Match(lower, @"\((\d+)\s*(?:to|-|–)\s*(\d+)\s*(?:hours?|giờ)\)");
                 if (paren.Success) vals = [int.Parse(paren.Groups[1].Value), int.Parse(paren.Groups[2].Value)];
                 if (vals.Count >= 2) { min = Math.Min(vals[0], vals[1]); max = Math.Max(vals[0], vals[1]); }
             }
-            if (min is null && Regex.IsMatch(lower, @"more than|over|at least|trước hơn|hơn|earlier than"))
-            {
-                var v = explicitHours.FirstOrDefault(h => h > 0);
-                if (v == 0) v = hours.FirstOrDefault();
-                if (v > 0) { min = v; max = null; }
-            }
-            if (min is null && Regex.IsMatch(lower, @"less than|within|under|fewer than|dưới|ít hơn"))
+            if (min is null && Regex.IsMatch(lower, @"less than|within|under|fewer than|dưới|ít hơn|trong vòng|muộn hơn"))
             {
                 var v = explicitHours.FirstOrDefault(h => h > 0);
                 if (v == 0) v = hours.FirstOrDefault();
                 if (v > 0) { min = 0; max = v; }
+            }
+            if (min is null && Regex.IsMatch(lower, @"more than|over|at least|earlier than|trước hơn|trước từ|từ\s+\d+.*trở lên|trên|hơn|ít nhất|tối thiểu|trước\s+\d+"))
+            {
+                var v = explicitHours.FirstOrDefault(h => h > 0);
+                if (v == 0) v = hours.FirstOrDefault();
+                if (v > 0) { min = v; max = null; }
             }
             if (min is null) continue;
 
@@ -259,31 +291,40 @@ public class PolicyExtractionService(IAppDbContext db, Concierge.TenantAi ai, Au
             result.Rules.Add(new ExtractedRule
             {
                 MinHoursBeforeCheckIn = min.Value, MaxHoursBeforeCheckIn = max, RefundPercent = percent.Value, AppliesTo = appliesTo,
-                Label = LabelFor(min.Value, max), SourceQuote = s, SourcePage = page,
+                Label = LabelFor(min.Value, max, language), SourceQuote = s, SourcePage = page,
             });
         }
 
-        var refundNote = sentences.FirstOrDefault(s => Regex.IsMatch(s.Text, @"refunds? (are|is) (returned|sent|processed)", RegexOptions.IgnoreCase));
+        var refundNote = sentences.FirstOrDefault(s => Regex.IsMatch(s.Text, @"refunds? (are|is) (returned|sent|processed)|tiền hoàn.*(xử lý|chuyển|hoàn lại|ngày làm việc)", RegexOptions.IgnoreCase));
         if (refundNote.Text != null) result.Notes = refundNote.Text;
-        if (result.Rules.Count == 0) result.Ambiguities.Add("We couldn't find clear cancellation windows in this document. Please add the rules manually.");
-        if (!sentences.Any(s => s.Text.Contains("no-show", StringComparison.OrdinalIgnoreCase) || s.Text.Contains("no show", StringComparison.OrdinalIgnoreCase)))
-            result.Ambiguities.Add("The document doesn't say what happens with no-shows; we assumed no refund.");
+        if (result.Rules.Count == 0)
+            result.Ambiguities.Add(vi
+                ? "Không tìm thấy khung thời gian hủy rõ ràng trong tài liệu. Vui lòng thêm quy tắc thủ công."
+                : "We couldn't find clear cancellation windows in this document. Please add the rules manually.");
+        if (!sentences.Any(s => s.Text.Contains("no-show", StringComparison.OrdinalIgnoreCase) || s.Text.Contains("no show", StringComparison.OrdinalIgnoreCase) || s.Text.Contains("không đến", StringComparison.OrdinalIgnoreCase)))
+            result.Ambiguities.Add(vi
+                ? "Tài liệu chưa nêu rõ trường hợp khách không đến (no-show); hệ thống tạm mặc định không hoàn tiền."
+                : "The document doesn't say what happens with no-shows; we assumed no refund.");
 
-        var faqKeys = new (string Pattern, string Question)[]
+        var faqKeys = new (string Pattern, string QuestionEn, string QuestionVi)[]
         {
-            (@"check-in is|check-in from|check in from", "What are the check-in and check-out times?"),
-            (@"breakfast", "Is breakfast included?"),
-            (@"parking", "Is there parking?"),
-            (@"\bpets?\b", "Are pets allowed?"),
-            (@"smok", "Can I smoke at the property?"),
-            (@"quiet hours", "Are there quiet hours?"),
-            (@"wi-?fi", "Is there Wi-Fi?"),
-            (@"early check-in|late check-out", "Can I check in early or check out late?"),
+            (@"check-in is|check-in from|check in from|nhận phòng.*từ|giờ nhận phòng|giờ check-in", "What are the check-in and check-out times?", "Giờ nhận phòng và trả phòng là mấy giờ?"),
+            (@"breakfast|bữa sáng|ăn sáng", "Is breakfast included?", "Có bao gồm bữa sáng không?"),
+            (@"parking|đỗ xe|gửi xe|bãi xe", "Is there parking?", "Chỗ nghỉ có chỗ đỗ xe không?"),
+            (@"\bpets?\b|thú cưng|vật nuôi", "Are pets allowed?", "Có được mang theo thú cưng không?"),
+            (@"smok|hút thuốc", "Can I smoke at the property?", "Có được hút thuốc tại chỗ nghỉ không?"),
+            (@"quiet hours|giờ yên tĩnh|giữ yên lặng", "Are there quiet hours?", "Chỗ nghỉ có quy định giờ yên tĩnh không?"),
+            (@"wi-?fi|mật khẩu mạng", "Is there Wi-Fi?", "Chỗ nghỉ có Wi-Fi không?"),
+            (@"early check-in|late check-out|nhận phòng sớm|trả phòng muộn", "Can I check in early or check out late?", "Có thể nhận phòng sớm hoặc trả phòng muộn không?"),
         };
-        foreach (var (pattern, q) in faqKeys)
+        foreach (var (pattern, qEn, qVi) in faqKeys)
         {
-            var hit = sentences.FirstOrDefault(s => Regex.IsMatch(s.Text, pattern, RegexOptions.IgnoreCase) && !s.Text.ToLowerInvariant().Contains("cancel"));
-            if (hit.Text != null) result.SuggestedFaqs.Add(new ExtractedFaq { Question = q, Answer = hit.Text });
+            var hit = sentences.FirstOrDefault(s =>
+            {
+                var l = s.Text.ToLowerInvariant();
+                return Regex.IsMatch(s.Text, pattern, RegexOptions.IgnoreCase) && !l.Contains("cancel") && !l.Contains("hủy") && !l.Contains("huỷ");
+            });
+            if (hit.Text != null) result.SuggestedFaqs.Add(new ExtractedFaq { Question = vi ? qVi : qEn, Answer = hit.Text });
         }
         return result;
     }

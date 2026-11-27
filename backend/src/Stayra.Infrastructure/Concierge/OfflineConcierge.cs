@@ -106,8 +106,8 @@ public partial class OfflineConcierge(IAppDbContext db, ConciergeTools tools, IR
                         "Mình đã gửi yêu cầu hủy cho chủ nhà. Bạn sẽ nhận được tin nhắn ngay khi chủ nhà phản hồi nhé.");
                 var refunded = cr.GetProperty("refunded").GetDecimal();
                 return refunded > 0
-                    ? L($"Done — booking {s.Code} is cancelled and {Vnd(refunded)} is on its way back to your MoMo wallet. Is there anything else I can help with?",
-                        $"Xong rồi — đặt phòng {s.Code} đã được hủy và {Vnd(refunded)} sẽ được hoàn về ví MoMo của bạn. Bạn cần hỗ trợ gì thêm không?")
+                    ? L($"Done — booking {s.Code} is cancelled and {Vnd(refunded)} is on its way back via VNPay. Is there anything else I can help with?",
+                        $"Xong rồi — đặt phòng {s.Code} đã được hủy và {Vnd(refunded)} sẽ được hoàn qua VNPay của bạn. Bạn cần hỗ trợ gì thêm không?")
                     : L($"Done — booking {s.Code} is cancelled. Is there anything else I can help with?",
                         $"Xong rồi — đặt phòng {s.Code} đã được hủy. Bạn cần hỗ trợ gì thêm không?");
             }

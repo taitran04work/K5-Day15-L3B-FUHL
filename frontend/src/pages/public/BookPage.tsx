@@ -49,7 +49,13 @@ export default function BookPage() {
   type FormValues = z.infer<typeof schema>
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { guestName: "", guestPhone: "", guestEmail: "", note: "" } })
 
-  const room = useQuery({ queryKey: ["public-room", slug, roomId], enabled: !!roomId, queryFn: () => api.get<Room>(`/api/public/${slug}/rooms/${roomId}`) })
+  const room = useQuery({
+    queryKey: ["public-room", slug, roomId],
+    enabled: !!roomId,
+    initialData: () => home.rooms.find((x) => x.id === roomId),
+    staleTime: 60_000,
+    queryFn: () => api.get<Room>(`/api/public/${slug}/rooms/${roomId}`),
+  })
   const quote = useQuery({
     queryKey: ["quote", slug, roomId, stay],
     enabled: !!roomId && !created,

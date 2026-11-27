@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode, t
 import { Link } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowRight, BedDouble, Clock, Mail, MapPin, Phone, Users, Wallet } from "lucide-react"
+import { ArrowRight, BedDouble, ChevronLeft, ChevronRight, Clock, Mail, MapPin, Phone, Users, Wallet } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/common"
 import { Logo } from "@/components/Logo"
@@ -413,16 +413,91 @@ function RoomsSlide({ home, slug }: { home: PublicHome; slug: string }) {
 
 /* ---------- 04 policies + FAQ ---------- */
 
+const FAQ_PER_COLUMN = 6
+
+function FaqAccordionList({
+  items,
+  open,
+  onToggle,
+}: {
+  items: PublicHome["faqs"]
+  open: string | null
+  onToggle: (id: string) => void
+}) {
+  return (
+    <div className="divide-y divide-white/10">
+      {items.map((f) => {
+        const isOpen = open === f.id
+        return (
+          <div key={f.id} className="py-1">
+            <button
+              type="button"
+              aria-expanded={isOpen}
+              onClick={() => onToggle(f.id)}
+              className="flex w-full items-center justify-between gap-4 py-2.5 text-left text-[15px] font-semibold text-white"
+            >
+              <span>{f.question}</span>
+              <span className={cn("shrink-0 text-xl leading-none text-white/60 transition-transform duration-300", isOpen && "rotate-45 text-white")} aria-hidden>
+                +
+              </span>
+            </button>
+            <div className={cn("grid transition-[grid-template-rows] duration-300 ease-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+              <p className="overflow-hidden text-sm leading-relaxed text-white/80">
+                <span className="block pb-3">{f.answer}</span>
+              </p>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function PoliciesSlide({ home }: { home: PublicHome }) {
   const { t } = useTranslation()
   const { cancellation, faqs } = home
-  const [open, setOpen] = useState<string | null>(faqs[0]?.id ?? null)
+  const [open, setOpen] = useState<string | null>(null)
+  const [faqPage, setFaqPage] = useState(0)
+
+  const pageSize = cancellation ? FAQ_PER_COLUMN : FAQ_PER_COLUMN * 2
+  const totalPages = Math.max(1, Math.ceil(faqs.length / pageSize))
+  const safePage = Math.min(faqPage, totalPages - 1)
+  const pageFaqs = faqs.slice(safePage * pageSize, (safePage + 1) * pageSize)
+
+  const splitTwoColumns = !cancellation && faqs.length > FAQ_PER_COLUMN
+  const mid = splitTwoColumns ? Math.ceil(pageFaqs.length / 2) : pageFaqs.length
+  const leftFaqs = pageFaqs.slice(0, mid)
+  const rightFaqs = splitTwoColumns ? pageFaqs.slice(mid) : []
+  const toggleFaq = (id: string) => setOpen((cur) => (cur === id ? null : id))
+
+  const pager = totalPages > 1 && (
+    <div className="flex items-center gap-1.5 text-xs text-white/75 tabular">
+      <button
+        type="button"
+        onClick={() => { setFaqPage((p) => (p - 1 + totalPages) % totalPages); setOpen(null) }}
+        aria-label={t("room.previousPhoto")}
+        className="flex size-7 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white/85 transition hover:bg-white/15"
+      >
+        <ChevronLeft className="size-3.5" />
+      </button>
+      <span className="min-w-8 text-center">{safePage + 1}/{totalPages}</span>
+      <button
+        type="button"
+        onClick={() => { setFaqPage((p) => (p + 1) % totalPages); setOpen(null) }}
+        aria-label={t("room.nextPhoto")}
+        className="flex size-7 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white/85 transition hover:bg-white/15"
+      >
+        <ChevronRight className="size-3.5" />
+      </button>
+    </div>
+  )
+
   return (
     <Frame scrim="full" className="items-start lg:items-center">
       <div className="mx-auto w-full max-w-[1200px]">
         <Eyebrow>{t("public.deck.navPolicies")}</Eyebrow>
         <H2>{t("public.deck.policiesTitle")}</H2>
-        <div className="mt-10 grid gap-5 lg:grid-cols-2">
+        <div className="mt-10 grid items-start gap-5 lg:grid-cols-2">
           {cancellation && (
             <Reveal delay={0.25}>
               <Glass className="p-6 sm:p-7">
@@ -448,29 +523,28 @@ function PoliciesSlide({ home }: { home: PublicHome }) {
               </Glass>
             </Reveal>
           )}
-          {faqs.length > 0 && (
+          {leftFaqs.length > 0 && (
             <Reveal delay={0.35}>
               <Glass className="p-6 sm:p-7">
-                <h3 className="text-xl font-semibold text-white">{t("public.faqTitle")}</h3>
-                <div className="mt-4 divide-y divide-white/10">
-                  {faqs.map((f) => {
-                    const isOpen = open === f.id
-                    return (
-                      <div key={f.id} className="py-1">
-                        <button type="button" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : f.id)} className="flex w-full items-center justify-between gap-4 py-2.5 text-left text-[15px] font-semibold text-white">
-                          {f.question}
-                          <span className={cn("text-xl leading-none text-white/60 transition-transform duration-300", isOpen && "rotate-45 text-white")} aria-hidden>
-                            +
-                          </span>
-                        </button>
-                        <div className={cn("grid transition-[grid-template-rows] duration-300 ease-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-                          <p className="overflow-hidden text-sm leading-relaxed text-white/80">
-                            <span className="block pb-3">{f.answer}</span>
-                          </p>
-                        </div>
-                      </div>
-                    )
-                  })}
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-xl font-semibold text-white">{t("public.faqTitle")}</h3>
+                  {!splitTwoColumns && pager}
+                </div>
+                <div className="mt-4">
+                  <FaqAccordionList items={leftFaqs} open={open} onToggle={toggleFaq} />
+                </div>
+              </Glass>
+            </Reveal>
+          )}
+          {rightFaqs.length > 0 && (
+            <Reveal delay={0.42}>
+              <Glass className="p-6 sm:p-7">
+                <div className="flex min-h-7 items-center justify-between gap-3">
+                  <h3 className="text-xl font-semibold text-white/0 select-none" aria-hidden>{t("public.faqTitle")}</h3>
+                  {pager}
+                </div>
+                <div className="mt-4">
+                  <FaqAccordionList items={rightFaqs} open={open} onToggle={toggleFaq} />
                 </div>
               </Glass>
             </Reveal>

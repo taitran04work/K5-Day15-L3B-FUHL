@@ -71,26 +71,27 @@ public static class RefundEngine
     }
 
     /// <summary>Finds gaps (uncovered hour ranges) and overlaps between rules.</summary>
-    public static IReadOnlyList<PolicyWarning> Analyze(IReadOnlyList<RefundRule> rules)
+    public static IReadOnlyList<PolicyWarning> Analyze(IReadOnlyList<RefundRule> rules, string language = "en")
     {
+        var vi = GuestText.IsVietnamese(language);
         var warnings = new List<PolicyWarning>();
         if (rules.Count == 0)
         {
-            warnings.Add(new("empty", "Add at least one rule.", null, null));
+            warnings.Add(new("empty", vi ? "Thêm ít nhất một quy tắc." : "Add at least one rule.", null, null));
             return warnings;
         }
 
         foreach (var r in rules)
         {
             if (r.MaxHoursBeforeCheckIn is { } mx && mx <= r.MinHoursBeforeCheckIn)
-                warnings.Add(new("invalid_range", $"\"{r.Label}\" ends before it starts.", r.MinHoursBeforeCheckIn, mx));
+                warnings.Add(new("invalid_range", vi ? $"\"{r.Label}\" kết thúc trước khi bắt đầu." : $"\"{r.Label}\" ends before it starts.", r.MinHoursBeforeCheckIn, mx));
             if (r.RefundPercent is < 0 or > 100)
-                warnings.Add(new("invalid_percent", $"\"{r.Label}\" must refund between 0% and 100%.", r.MinHoursBeforeCheckIn, r.MaxHoursBeforeCheckIn));
+                warnings.Add(new("invalid_percent", vi ? $"\"{r.Label}\" phải hoàn từ 0% đến 100%." : $"\"{r.Label}\" must refund between 0% and 100%.", r.MinHoursBeforeCheckIn, r.MaxHoursBeforeCheckIn));
         }
 
         var sorted = rules.OrderBy(r => r.MinHoursBeforeCheckIn).ToList();
         if (sorted[0].MinHoursBeforeCheckIn > 0)
-            warnings.Add(new("gap", $"Cancellations less than {sorted[0].MinHoursBeforeCheckIn} hours before check-in aren't covered.", 0, sorted[0].MinHoursBeforeCheckIn));
+            warnings.Add(new("gap", vi ? $"Chưa có quy tắc cho việc hủy dưới {sorted[0].MinHoursBeforeCheckIn} giờ trước giờ nhận phòng." : $"Cancellations less than {sorted[0].MinHoursBeforeCheckIn} hours before check-in aren't covered.", 0, sorted[0].MinHoursBeforeCheckIn));
 
         for (var i = 0; i < sorted.Count - 1; i++)
         {
@@ -98,20 +99,20 @@ public static class RefundEngine
             var next = sorted[i + 1];
             if (cur.MaxHoursBeforeCheckIn is null)
             {
-                warnings.Add(new("overlap", $"\"{cur.Label}\" and \"{next.Label}\" overlap.", next.MinHoursBeforeCheckIn, null));
+                warnings.Add(new("overlap", vi ? $"\"{cur.Label}\" và \"{next.Label}\" bị chồng lấn." : $"\"{cur.Label}\" and \"{next.Label}\" overlap.", next.MinHoursBeforeCheckIn, null));
                 continue;
             }
             if (cur.MaxHoursBeforeCheckIn < next.MinHoursBeforeCheckIn)
-                warnings.Add(new("gap", $"Cancellations between {cur.MaxHoursBeforeCheckIn} and {next.MinHoursBeforeCheckIn} hours before check-in aren't covered.",
+                warnings.Add(new("gap", vi ? $"Chưa có quy tắc cho việc hủy từ {cur.MaxHoursBeforeCheckIn} đến {next.MinHoursBeforeCheckIn} giờ trước giờ nhận phòng." : $"Cancellations between {cur.MaxHoursBeforeCheckIn} and {next.MinHoursBeforeCheckIn} hours before check-in aren't covered.",
                     cur.MaxHoursBeforeCheckIn, next.MinHoursBeforeCheckIn));
             else if (cur.MaxHoursBeforeCheckIn > next.MinHoursBeforeCheckIn)
-                warnings.Add(new("overlap", $"\"{cur.Label}\" and \"{next.Label}\" overlap between {next.MinHoursBeforeCheckIn} and {cur.MaxHoursBeforeCheckIn} hours.",
+                warnings.Add(new("overlap", vi ? $"\"{cur.Label}\" và \"{next.Label}\" chồng lấn trong khoảng {next.MinHoursBeforeCheckIn} đến {cur.MaxHoursBeforeCheckIn} giờ." : $"\"{cur.Label}\" and \"{next.Label}\" overlap between {next.MinHoursBeforeCheckIn} and {cur.MaxHoursBeforeCheckIn} hours.",
                     next.MinHoursBeforeCheckIn, cur.MaxHoursBeforeCheckIn));
         }
 
         var last = sorted[^1];
         if (last.MaxHoursBeforeCheckIn is { } lastMax)
-            warnings.Add(new("gap", $"Cancellations more than {lastMax} hours before check-in aren't covered.", lastMax, null));
+            warnings.Add(new("gap", vi ? $"Chưa có quy tắc cho việc hủy hơn {lastMax} giờ trước giờ nhận phòng." : $"Cancellations more than {lastMax} hours before check-in aren't covered.", lastMax, null));
 
         return warnings;
     }

@@ -85,22 +85,22 @@ public class ChangeService(
         {
             if (diff > 0)
                 return toPay > 0
-                    ? $"Kỳ lưu trú mới đắt hơn {difference}. Bạn sẽ nhận được liên kết MoMo để thanh toán phần chênh lệch."
+                    ? $"Kỳ lưu trú mới đắt hơn {difference}. Bạn sẽ nhận được liên kết VNPay để thanh toán phần chênh lệch."
                     : $"Kỳ lưu trú mới đắt hơn {difference}. Khoản chênh lệch được cộng vào số tiền còn phải thanh toán.";
             if (diff == 0) return "Giá không thay đổi.";
             var lowerPrice = $"Kỳ lưu trú mới rẻ hơn {difference}.";
-            if (toRefund > 0) return $"{lowerPrice} Bạn sẽ được hoàn lại {GuestText.Amount(toRefund, language)} qua MoMo.";
+            if (toRefund > 0) return $"{lowerPrice} Bạn sẽ được hoàn lại {GuestText.Amount(toRefund, language)} qua VNPay.";
             if (credit > 0) return $"{lowerPrice} Khoản {GuestText.Amount(credit, language)} sẽ được giữ lại để cấn trừ vào kỳ lưu trú.";
             return $"{lowerPrice} Số tiền còn phải thanh toán giảm tương ứng.";
         }
 
         if (diff > 0)
             return toPay > 0
-                ? $"The new stay costs {difference} more. You'll get a MoMo link to pay the difference."
+                ? $"The new stay costs {difference} more. You'll get a VNPay link to pay the difference."
                 : $"The new stay costs {difference} more. This is added to your remaining balance.";
         if (diff == 0) return "The price stays the same.";
         var cheaperStay = $"The new stay costs {difference} less.";
-        if (toRefund > 0) return $"{cheaperStay} {GuestText.Amount(toRefund, language)} you've already paid will be refunded to MoMo.";
+        if (toRefund > 0) return $"{cheaperStay} {GuestText.Amount(toRefund, language)} you've already paid will be refunded to VNPay.";
         if (credit > 0) return $"{cheaperStay} {GuestText.Amount(credit, language)} will be kept as credit for your stay.";
         return $"{cheaperStay} Your remaining balance goes down accordingly.";
     }
@@ -262,7 +262,7 @@ public class ChangeService(
             if (refunded > 0)
             {
                 var amount = GuestText.Amount(refunded, recipientLanguage);
-                return vi ? $"{summary} {amount} đã được hoàn vào ví MoMo của bạn." : $"{summary} A refund of {amount} has been sent to your MoMo wallet.";
+                return vi ? $"{summary} {amount} đã được hoàn qua VNPay của bạn." : $"{summary} A refund of {amount} has been sent via VNPay.";
             }
             if (refundAmount > 0)
             {

@@ -174,7 +174,7 @@ public class ZaloAdapter(ZaloClient zalo, IOptions<ZaloOptions> options, ILogger
                 case "payment":
                     var url = d.TryGetProperty("payUrl", out var pu) && pu.ValueKind == JsonValueKind.String ? pu.GetString() : $"{webBase}/h/{tenant.Slug}/manage";
                     var amount = GuestText.Amount(d.GetProperty("amount").GetDecimal(), language);
-                    sb.Append(vi ? $"\nThanh toán {amount} qua MoMo: {url}" : $"\nPay {amount} with MoMo: {url}");
+                    sb.Append(vi ? $"\nThanh toán {amount} qua VNPay: {url}" : $"\nPay {amount} with VNPay: {url}");
                     break;
             }
         }

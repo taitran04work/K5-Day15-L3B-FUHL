@@ -37,12 +37,11 @@ services:
       App__WebBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
       Cors__Origins: ${WEB_BASE_URL:-http://localhost:5173}
       Storage__Root: /data/uploads
-      Momo__PartnerCode: ${MOMO_PARTNER_CODE:-}
-      Momo__AccessKey: ${MOMO_ACCESS_KEY:-}
-      Momo__SecretKey: ${MOMO_SECRET_KEY:-}
-      Momo__IpnBaseUrl: ${PUBLIC_API_URL:-http://localhost:8080}
-      Momo__ReturnBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
-      Momo__Offline: ${MOMO_OFFLINE:-false}
+      Vnpay__TmnCode: ${VNPAY_TMN_CODE:-}
+      Vnpay__HashSecret: ${VNPAY_HASH_SECRET:-}
+      Vnpay__IpnBaseUrl: ${PUBLIC_API_URL:-http://localhost:8080}
+      Vnpay__ReturnBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
+      Vnpay__Offline: ${VNPAY_OFFLINE:-false}
       Anthropic__ApiKey: ${ANTHROPIC_API_KEY:-}
       Anthropic__Model: ${ANTHROPIC_MODEL:-claude-haiku-5-5}
       Embeddings__VoyageApiKey: ${VOYAGE_API_KEY:-}

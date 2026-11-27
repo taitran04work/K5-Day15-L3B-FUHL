@@ -19,7 +19,9 @@ public record BookingSettingsInput(string CheckInTime, string CheckOutTime, stri
 // Older clients still include DefaultLanguage. Only the website settings endpoint saves it.
 public record BotSettingsInput(bool BotEnabled, string? BotPersona, bool AutoApproveChanges, bool AutoApproveCancellations, string DefaultLanguage = "");
 
-public record MomoSettingsInput(string? PartnerCode, string? AccessKey, string? SecretKey);
+public record VnpaySettingsInput(string? TmnCode, string? HashSecret);
+
+public record EmailSettingsInput(string? Host, int? Port, string? Username, string? Password, string? FromEmail, string? FromName, bool EnableSsl = true, bool RemoveConfig = false);
 
 /// <summary>Bring-your-own AI key. <c>ApiKey</c> is write-only: it's verified, encrypted and never returned.</summary>
 public record AiSettingsInput(string? ApiKey, string? Model, bool RemoveKey = false);
@@ -111,15 +113,42 @@ public class SettingsController(IFileStorage storage, ISecretProtector secrets) 
         return TenantSettingsDto.From(t);
     }
 
-    [HttpPut("momo")]
-    public async Task<TenantSettingsDto> Momo(MomoSettingsInput i)
+    [HttpPut("vnpay")]
+    public async Task<TenantSettingsDto> Vnpay(VnpaySettingsInput i)
     {
         var t = await CurrentTenantAsync();
-        t.MomoPartnerCode = string.IsNullOrWhiteSpace(i.PartnerCode) ? null : i.PartnerCode.Trim();
-        if (!string.IsNullOrWhiteSpace(i.AccessKey)) t.MomoAccessKeyEnc = secrets.Protect(i.AccessKey.Trim());
-        if (!string.IsNullOrWhiteSpace(i.SecretKey)) t.MomoSecretKeyEnc = secrets.Protect(i.SecretKey.Trim());
-        if (t.MomoPartnerCode == null) { t.MomoAccessKeyEnc = null; t.MomoSecretKeyEnc = null; }
-        await Save("settings.momo");
+        t.VnpayTmnCode = string.IsNullOrWhiteSpace(i.TmnCode) ? null : i.TmnCode.Trim();
+        if (!string.IsNullOrWhiteSpace(i.HashSecret)) t.VnpayHashSecretEnc = secrets.Protect(i.HashSecret.Trim());
+        if (t.VnpayTmnCode == null) t.VnpayHashSecretEnc = null;
+        await Save("settings.vnpay");
+        return TenantSettingsDto.From(t);
+    }
+
+    [HttpPut("email")]
+    public async Task<TenantSettingsDto> Email(EmailSettingsInput i)
+    {
+        var t = await CurrentTenantAsync();
+        if (i.RemoveConfig || string.IsNullOrWhiteSpace(i.Username))
+        {
+            t.SmtpHost = null;
+            t.SmtpPort = null;
+            t.SmtpUsername = null;
+            t.SmtpPasswordEnc = null;
+            t.SmtpFromEmail = null;
+            t.SmtpFromName = null;
+            t.SmtpEnableSsl = true;
+        }
+        else
+        {
+            t.SmtpHost = string.IsNullOrWhiteSpace(i.Host) ? "smtp.gmail.com" : i.Host.Trim();
+            t.SmtpPort = i.Port is > 0 and <= 65535 ? i.Port : 587;
+            t.SmtpUsername = i.Username.Trim();
+            if (!string.IsNullOrWhiteSpace(i.Password)) t.SmtpPasswordEnc = secrets.Protect(i.Password.Trim());
+            t.SmtpFromEmail = string.IsNullOrWhiteSpace(i.FromEmail) ? null : i.FromEmail.Trim();
+            t.SmtpFromName = string.IsNullOrWhiteSpace(i.FromName) ? null : i.FromName.Trim();
+            t.SmtpEnableSsl = i.EnableSsl;
+        }
+        await Save("settings.email");
         return TenantSettingsDto.From(t);
     }
 

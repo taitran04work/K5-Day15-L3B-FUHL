@@ -9,20 +9,38 @@ using Stayra.Infrastructure.Policies;
 
 namespace Stayra.Tests;
 
-public class MomoSignatureTests
+public class VnpaySignatureTests
 {
-    private const string Secret = "K951B6PE1waDMi640xX08PD3vg6EkVlz";
-    private const string Access = "F8BBA842ECF85";
+    private const string TmnCode = "DEMO2109";
+    private const string HashSecret = "SANDBOXHASHSECRET0123456789ABCDEF";
 
     [Fact]
-    public void Create_raw_signature_uses_alphabetical_field_order()
+    public async Task Create_url_signs_sorted_vnp_fields_and_verifies_round_trip()
     {
-        var raw = MomoGateway.CreateRawSignature(Access, 50000, "", "https://example.com/ipn", "STR-TEST-D1", "Deposit STR-TEST", "MOMO",
-            "https://example.com/return", "req-1", "captureWallet");
-        raw.Should().Be("accessKey=F8BBA842ECF85&amount=50000&extraData=&ipnUrl=https://example.com/ipn&orderId=STR-TEST-D1&orderInfo=Deposit STR-TEST" +
-                        "&partnerCode=MOMO&redirectUrl=https://example.com/return&requestId=req-1&requestType=captureWallet");
-        // Reference value computed independently with Python's hmac/hashlib.
-        MomoGateway.Sign(raw, Secret).Should().Be("1fc37978512eeb456e632249a3aa177a15155fdf57f9a9542701972262104a7b");
+        var opts = Microsoft.Extensions.Options.Options.Create(new VnpayOptions
+        {
+            TmnCode = TmnCode,
+            HashSecret = HashSecret,
+            ReturnBaseUrl = "https://stayra.example.test",
+            Offline = false,
+        });
+        var gateway = new VnpayGateway(new HttpClient(), opts, new NullProtector(), Microsoft.Extensions.Logging.Abstractions.NullLogger<VnpayGateway>.Instance);
+        var creds = new Stayra.Application.Payments.GatewayCredentials(TmnCode, HashSecret);
+        var created = new DateTimeOffset(2027, 5, 1, 10, 0, 0, TimeSpan.Zero);
+
+        var res = await gateway.CreateAsync(creds, new Stayra.Application.Payments.CreatePaymentRequest(
+            "STR-TEST-D1", "req-1", 50000, "Deposit STR-TEST", "", created));
+
+        res.Success.Should().BeTrue();
+        res.PayUrl.Should().StartWith("https://sandbox.vnpayment.vn/paymentv2/vpcpay.html?");
+        var query = System.Web.HttpUtility.ParseQueryString(new Uri(res.PayUrl!).Query);
+        query["vnp_Amount"].Should().Be("5000000");
+        query["vnp_TmnCode"].Should().Be(TmnCode);
+        query["vnp_TxnRef"].Should().Be("STR-TEST-D1");
+        query["vnp_SecureHash"].Should().NotBeNullOrEmpty();
+
+        var parsed = query.AllKeys.Where(k => k != null).ToDictionary(k => k!, k => query[k!] ?? "");
+        gateway.VerifyIpn(creds, parsed, parsed["vnp_SecureHash"]).Should().BeTrue();
     }
 
     [Fact]
@@ -30,16 +48,23 @@ public class MomoSignatureTests
     {
         var fields = new Dictionary<string, string>
         {
-            ["partnerCode"] = "MOMO", ["orderId"] = "STR-TEST-D1", ["requestId"] = "req-1", ["amount"] = "50000", ["orderInfo"] = "Deposit",
-            ["orderType"] = "momo_wallet", ["transId"] = "4088878653", ["resultCode"] = "0", ["message"] = "Successful.", ["payType"] = "qr",
-            ["responseTime"] = "1721720663942", ["extraData"] = "",
+            ["vnp_TmnCode"] = TmnCode,
+            ["vnp_Amount"] = "5000000",
+            ["vnp_BankCode"] = "NCB",
+            ["vnp_OrderInfo"] = "Deposit STR-TEST-D1",
+            ["vnp_PayDate"] = "20270501170500",
+            ["vnp_ResponseCode"] = "00",
+            ["vnp_TransactionNo"] = "14422548",
+            ["vnp_TransactionStatus"] = "00",
+            ["vnp_TxnRef"] = "STR-TEST-D1",
         };
-        var sig = MomoGateway.Sign(MomoGateway.IpnRawSignature(Access, fields), Secret);
-        var gateway = new MomoGateway(new HttpClient(), Microsoft.Extensions.Options.Options.Create(new MomoOptions()), new NullProtector(), Microsoft.Extensions.Logging.Abstractions.NullLogger<MomoGateway>.Instance);
-        var creds = new Stayra.Application.Payments.GatewayCredentials("MOMO", Access, Secret);
+        var sig = VnpayGateway.Sign(VnpayGateway.BuildQueryData(fields), HashSecret);
+        var gateway = new VnpayGateway(new HttpClient(), Microsoft.Extensions.Options.Options.Create(new VnpayOptions()), new NullProtector(), Microsoft.Extensions.Logging.Abstractions.NullLogger<VnpayGateway>.Instance);
+        var creds = new Stayra.Application.Payments.GatewayCredentials(TmnCode, HashSecret);
 
         gateway.VerifyIpn(creds, fields, sig).Should().BeTrue();
-        fields["amount"] = "1000";
+        gateway.VerifyIpn(creds, fields, sig.ToUpperInvariant()).Should().BeTrue();
+        fields["vnp_Amount"] = "100000";
         gateway.VerifyIpn(creds, fields, sig).Should().BeFalse();
         gateway.VerifyIpn(creds, fields, "").Should().BeFalse();
     }

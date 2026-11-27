@@ -196,8 +196,8 @@ public class Seeder(StayraDbContext db, IFileStorage storage, ITenantContext ten
         AddFaq(pine, "Do you have parking?", "Free motorbike parking inside the gate; cars can park on the street outside.");
         AddFaq(pine, "How far is the city centre?", "About 10 minutes by car or 25 minutes on foot to Xuân Hương Lake and the night market.");
         AddFaq(pine, "Can I check in early?", "Early check-in depends on availability and costs 100,000 ₫ per hour. Message us on the day.");
-        AddFaq(sea, "How far is the beach?", "Bãi Sau beach is a 3-minute walk, two streets away.");
-        AddFaq(sea, "Do you rent motorbikes?", "Yes, from 150,000 ₫ per day. Ask us at check-in.");
+        AddFaq(sea, "Cách bãi biển bao xa?", "Bãi Sau chỉ cách khoảng 3 phút đi bộ, đi qua hai con phố.");
+        AddFaq(sea, "Homestay có cho thuê xe máy không?", "Có, giá từ 150.000 ₫/ngày. Bạn có thể hỏi khi nhận phòng.");
 
         await db.SaveChangesAsync();
 
@@ -309,7 +309,7 @@ public class Seeder(StayraDbContext db, IFileStorage storage, ITenantContext ten
                 db.Payments.Add(new Payment
                 {
                     TenantId = t.Id, BookingId = b.Id, Kind = paid >= q.Total ? PaymentKind.Remaining : PaymentKind.Deposit, Amount = paid,
-                    Provider = PaymentProvider.MoMo, OrderId = $"{b.Code}-SEED", RequestId = Guid.NewGuid().ToString("N"),
+                    Provider = PaymentProvider.VNPay, OrderId = $"{b.Code}-SEED", RequestId = Guid.NewGuid().ToString("N"),
                     Status = PaymentStatus.Paid, PaidAt = b.CreatedAt.AddMinutes(4), CreatedAt = b.CreatedAt, TransId = 0,
                 });
         }

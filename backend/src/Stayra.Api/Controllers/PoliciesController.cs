@@ -23,7 +23,7 @@ public class PoliciesController(IFileStorage storage, IJobScheduler jobs, Policy
 
     [HttpPost("documents")]
     [RequestSizeLimit(25_000_000)]
-    public async Task<PolicyDocumentDto> Upload(IFormFile file)
+    public async Task<PolicyDocumentDto> Upload(IFormFile file, [FromForm] string? language = null)
     {
         if (file == null || file.Length == 0) throw AppException.BadRequest("no_file", "Choose a PDF to upload.");
         if (!file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) && file.ContentType != "application/pdf")
@@ -36,20 +36,27 @@ public class PoliciesController(IFileStorage storage, IJobScheduler jobs, Policy
         Db.PolicyDocuments.Add(doc);
         Db.AuditLogs.Add(new AuditLog { TenantId = TenantId, Actor = Actor, Action = "policy.document_uploaded", EntityType = nameof(PolicyDocument), EntityId = doc.Id });
         await Db.SaveChangesAsync();
-        jobs.Enqueue<PolicyJobs>(j => j.Ingest(doc.Id, true));
+        var lang = NormalizeLanguage(language);
+        jobs.Enqueue<PolicyJobs>(j => j.Ingest(doc.Id, true, lang));
         return PolicyDocumentDto.From(doc);
     }
 
     [HttpPost("documents/{id:guid}/reprocess")]
-    public async Task<PolicyDocumentDto> Reprocess(Guid id)
+    public async Task<PolicyDocumentDto> Reprocess(Guid id, [FromQuery] string? language = null)
     {
         var doc = await Db.PolicyDocuments.FirstOrDefaultAsync(d => d.Id == id) ?? throw AppException.NotFound("Document");
         doc.Status = DocumentStatus.Uploaded;
         doc.StatusDetail = null;
         await Db.SaveChangesAsync();
-        jobs.Enqueue<PolicyJobs>(j => j.Ingest(doc.Id, true));
+        var lang = NormalizeLanguage(language);
+        jobs.Enqueue<PolicyJobs>(j => j.Ingest(doc.Id, true, lang));
         return PolicyDocumentDto.From(doc);
     }
+
+    private static string? NormalizeLanguage(string? language) =>
+        string.Equals(language, "vi", StringComparison.OrdinalIgnoreCase) ? "vi"
+        : string.Equals(language, "en", StringComparison.OrdinalIgnoreCase) ? "en"
+        : null;
 
     [HttpDelete("documents/{id:guid}")]
     public async Task<IActionResult> DeleteDocument(Guid id)
@@ -75,6 +82,8 @@ public class PoliciesController(IFileStorage storage, IJobScheduler jobs, Policy
     [HttpPost("draft")]
     public async Task<RefundPolicyDto> CreateDraft()
     {
+        var tenant = await CurrentTenantAsync();
+        var vi = GuestText.IsVietnamese(tenant.DefaultLanguage);
         var active = await Db.RefundPolicies.Where(p => p.Status == RefundPolicyStatus.Active).OrderByDescending(p => p.Version).FirstOrDefaultAsync();
         var version = (await Db.RefundPolicies.MaxAsync(p => (int?)p.Version) ?? 0) + 1;
         var draft = new RefundPolicy
@@ -87,8 +96,8 @@ public class PoliciesController(IFileStorage storage, IJobScheduler jobs, Policy
                 AppliesTo = r.AppliesTo, Label = r.Label, SourceQuote = r.SourceQuote, SourcePage = r.SourcePage,
             }).ToList() ??
             [
-                new RefundRule { MinHoursBeforeCheckIn = 168, RefundPercent = 100, AppliesTo = RefundAppliesTo.Deposit, Label = "More than 7 days before" },
-                new RefundRule { MinHoursBeforeCheckIn = 0, MaxHoursBeforeCheckIn = 168, RefundPercent = 0, AppliesTo = RefundAppliesTo.Deposit, Label = "Less than 7 days before" },
+                new RefundRule { MinHoursBeforeCheckIn = 168, RefundPercent = 100, AppliesTo = RefundAppliesTo.Deposit, Label = vi ? "Hơn 7 ngày trước" : "More than 7 days before" },
+                new RefundRule { MinHoursBeforeCheckIn = 0, MaxHoursBeforeCheckIn = 168, RefundPercent = 0, AppliesTo = RefundAppliesTo.Deposit, Label = vi ? "Dưới 7 ngày trước" : "Less than 7 days before" },
             ],
         };
         Db.RefundPolicies.Add(draft);

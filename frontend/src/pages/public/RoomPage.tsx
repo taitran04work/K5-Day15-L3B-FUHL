@@ -35,7 +35,12 @@ export default function RoomPage() {
   const navigate = useNavigate()
   const { search } = useLocation()
   const tenant = home.tenant
-  const room = useQuery({ queryKey: ["public-room", slug, roomId], queryFn: () => api.get<Room>(`/api/public/${slug}/rooms/${roomId}`) })
+  const room = useQuery({
+    queryKey: ["public-room", slug, roomId],
+    initialData: () => home.rooms.find((x) => x.id === roomId),
+    staleTime: 60_000,
+    queryFn: () => api.get<Room>(`/api/public/${slug}/rooms/${roomId}`),
+  })
   const [stay, setStay] = useStayFromParams(room.data, tenant.openingTime)
   const busy = useBusy(slug, roomId)
 

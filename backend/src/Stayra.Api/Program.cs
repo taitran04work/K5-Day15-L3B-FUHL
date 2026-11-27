@@ -24,6 +24,9 @@ if (args.Length >= 2 && args[0] == "generate-seed-pdf")
     return;
 }
 
+// Load root .env when running outside Docker (never overrides existing environment variables).
+LoadDotEnv();
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((ctx, lc) => lc
@@ -155,6 +158,47 @@ if (!isTesting)
 }
 
 app.Run();
+
+static void LoadDotEnv()
+{
+    var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
+    while (dir is not null)
+    {
+        var path = Path.Combine(dir.FullName, ".env");
+        if (File.Exists(path))
+        {
+            foreach (var raw in File.ReadAllLines(path))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith('#')) continue;
+                var idx = line.IndexOf('=');
+                if (idx <= 0) continue;
+                var key = line[..idx].Trim();
+                var val = line[(idx + 1)..].Trim();
+                if (val.Length >= 2 && ((val[0] == '"' && val[^1] == '"') || (val[0] == '\'' && val[^1] == '\'')))
+                    val = val[1..^1];
+                if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+                    Environment.SetEnvironmentVariable(key, val);
+                var mapped = key switch
+                {
+                    "SMTP_HOST" => "Smtp__Host",
+                    "SMTP_PORT" => "Smtp__Port",
+                    "SMTP_USERNAME" => "Smtp__Username",
+                    "SMTP_PASSWORD" => "Smtp__Password",
+                    "SMTP_FROM_EMAIL" => "Smtp__FromEmail",
+                    "SMTP_FROM_NAME" => "Smtp__FromName",
+                    "SMTP_ENABLE_SSL" => "Smtp__EnableSsl",
+                    "WEB_BASE_URL" => "App__WebBaseUrl",
+                    _ => null,
+                };
+                if (mapped is not null && string.IsNullOrEmpty(Environment.GetEnvironmentVariable(mapped)))
+                    Environment.SetEnvironmentVariable(mapped, val);
+            }
+            return;
+        }
+        dir = dir.Parent;
+    }
+}
 
 public partial class Program;
 

@@ -6,18 +6,26 @@ using Stayra.Domain;
 
 namespace Stayra.Application.Payments;
 
-public record GatewayCredentials(string PartnerCode, string AccessKey, string SecretKey);
+public record GatewayCredentials(string TmnCode, string HashSecret);
 
-public record CreatePaymentRequest(string OrderId, string RequestId, long Amount, string OrderInfo, string ExtraData);
-public record CreatePaymentResult(bool Success, int ResultCode, string Message, string? PayUrl, string? QrCodeUrl, string? Deeplink);
-public record QueryPaymentResult(bool Success, int ResultCode, string Message, long? TransId);
-public record RefundResult(bool Success, int ResultCode, string Message, long? TransId);
+public record CreatePaymentRequest(
+    string OrderId,
+    string RequestId,
+    long Amount,
+    string OrderInfo,
+    string ExtraData,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? ExpiresAt = null,
+    string? IpAddr = null);
+public record CreatePaymentResult(bool Success, string ResponseCode, string Message, string? PayUrl, string? QrCodeUrl, string? Deeplink);
+public record QueryPaymentResult(bool Success, string ResponseCode, string Message, long? TransId);
+public record RefundResult(bool Success, string ResponseCode, string Message, long? TransId);
 
 public interface IPaymentGateway
 {
     Task<CreatePaymentResult> CreateAsync(GatewayCredentials creds, CreatePaymentRequest req, CancellationToken ct = default);
-    Task<QueryPaymentResult> QueryAsync(GatewayCredentials creds, string orderId, string requestId, CancellationToken ct = default);
-    Task<RefundResult> RefundAsync(GatewayCredentials creds, string orderId, string requestId, long amount, long transId, string description, CancellationToken ct = default);
+    Task<QueryPaymentResult> QueryAsync(GatewayCredentials creds, Payment payment, string requestId, CancellationToken ct = default);
+    Task<RefundResult> RefundAsync(GatewayCredentials creds, Payment originalPayment, Payment refundPayment, long amount, string description, CancellationToken ct = default);
     bool VerifyIpn(GatewayCredentials creds, IReadOnlyDictionary<string, string> fields, string signature);
     GatewayCredentials CredentialsFor(Tenant tenant);
 }
@@ -40,10 +48,11 @@ public class PaymentService(IAppDbContext db, IPaymentGateway gateway, TimeProvi
             BookingId = booking.Id,
             Kind = kind,
             Amount = amount,
-            Provider = PaymentProvider.MoMo,
+            Provider = PaymentProvider.VNPay,
             OrderId = $"{booking.Code}-{kind.ToString()[0]}{n}-{Guid.NewGuid().ToString("N")[..6]}",
             RequestId = Guid.NewGuid().ToString("N"),
             ExpiresAt = expiresAt,
+            CreatedAt = clock.GetUtcNow(),
         };
         db.Payments.Add(payment);
 
@@ -57,20 +66,20 @@ public class PaymentService(IAppDbContext db, IPaymentGateway gateway, TimeProvi
         try
         {
             var res = await gateway.CreateAsync(gateway.CredentialsFor(tenant),
-                new CreatePaymentRequest(payment.OrderId, payment.RequestId, (long)amount, $"{label} {booking.Code} - {tenant.Name}", ""), ct);
+                new CreatePaymentRequest(payment.OrderId, payment.RequestId, (long)amount, $"{label} {booking.Code} - {tenant.Name}", "", payment.CreatedAt, expiresAt), ct);
             payment.PayUrl = res.PayUrl;
             payment.QrCodeUrl = res.QrCodeUrl;
             payment.Deeplink = res.Deeplink;
             payment.Message = res.Message;
             if (!res.Success)
             {
-                log.LogWarning("MoMo create failed for {OrderId}: {Code} {Message}", payment.OrderId, res.ResultCode, res.Message);
+                log.LogWarning("VNPay create failed for {OrderId}: {Code} {Message}", payment.OrderId, res.ResponseCode, res.Message);
             }
         }
         catch (Exception ex)
         {
             // Network failure must not lose the booking; the payment stays Created and can be simulated / retried.
-            log.LogWarning(ex, "MoMo create threw for {OrderId}", payment.OrderId);
+            log.LogWarning(ex, "VNPay create threw for {OrderId}", payment.OrderId);
             payment.Message = "Payment provider unreachable";
         }
         await db.SaveChangesAsync(ct);
@@ -94,16 +103,16 @@ public class PaymentService(IAppDbContext db, IPaymentGateway gateway, TimeProvi
         return true;
     }
 
-    public async Task MarkFailedAsync(Payment payment, int resultCode, string message, string? rawJson, CancellationToken ct = default)
+    public async Task MarkFailedAsync(Payment payment, string responseCode, string message, string? rawJson, CancellationToken ct = default)
     {
         if (payment.Status != PaymentStatus.Created) return;
         payment.Status = PaymentStatus.Failed;
-        payment.Message = $"{resultCode}: {message}";
+        payment.Message = $"{responseCode}: {message}";
         if (rawJson != null) payment.RawCallbackJson = rawJson;
         await db.SaveChangesAsync(ct);
     }
 
-    /// <summary>Refunds up to <paramref name="amount"/> across paid MoMo payments (largest first). Returns the amount actually refunded.</summary>
+    /// <summary>Refunds up to <paramref name="amount"/> across paid VNPay payments (largest first). Returns the amount actually refunded.</summary>
     public async Task<decimal> RefundAsync(Tenant tenant, Booking booking, decimal amount, string reason, CancellationToken ct = default)
     {
         if (amount <= 0) return 0;
@@ -138,11 +147,11 @@ public class PaymentService(IAppDbContext db, IPaymentGateway gateway, TimeProvi
             db.Payments.Add(refund);
 
             var ok = true;
-            if (src.Provider == PaymentProvider.MoMo && src.TransId is { } tid && tid > 0)
+            if (src.Provider == PaymentProvider.VNPay && src.TransId is { } tid && tid > 0)
             {
                 try
                 {
-                    var res = await gateway.RefundAsync(gateway.CredentialsFor(tenant), refund.OrderId, refund.RequestId, (long)part, tid, reason, ct);
+                    var res = await gateway.RefundAsync(gateway.CredentialsFor(tenant), src, refund, (long)part, reason, ct);
                     ok = res.Success;
                     refund.TransId = res.TransId;
                     refund.RawCallbackJson = JsonSerializer.Serialize(res);
@@ -150,12 +159,12 @@ public class PaymentService(IAppDbContext db, IPaymentGateway gateway, TimeProvi
                 }
                 catch (Exception ex)
                 {
-                    log.LogWarning(ex, "MoMo refund failed for {OrderId}", refund.OrderId);
+                    log.LogWarning(ex, "VNPay refund failed for {OrderId}", refund.OrderId);
                     ok = false;
                     refund.Message = "Payment provider unreachable — refund manually";
                 }
             }
-            // Simulated / cash payments (no MoMo transId) are recorded as refunded for the host to settle manually.
+            // Simulated / cash payments (no VNPay transId) are recorded as refunded for the host to settle manually.
             refund.Status = ok ? PaymentStatus.Refunded : PaymentStatus.Failed;
             refund.PaidAt = clock.GetUtcNow();
             if (ok)

@@ -33,6 +33,18 @@ export default function PublicLayout() {
     if (home.data) document.title = home.data.tenant.name
   }, [home.data])
 
+  // Warm public subpage chunks right after mount so switching to Manage Booking / Rooms is instant.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void import("./ManageBooking")
+      void import("./RoomsPage")
+      void import("./RoomPage")
+      void import("./BookPage")
+      void import("./ConfirmationPage")
+    }, 100)
+    return () => window.clearTimeout(timer)
+  }, [])
+
   if (home.isLoading)
     return (
       <div className="guest-storefront flex min-h-dvh items-center justify-center text-muted-foreground">
@@ -75,27 +87,27 @@ function Storefront({ home, slug, pathname }: { home: PublicHome; slug: string; 
     )
 
   return (
-    <div className="guest-storefront min-h-dvh bg-[#0b0f16]">
-      <AnimatePresence mode="wait" initial={false}>
+    <div className="guest-storefront relative min-h-dvh bg-[#0b0f16]">
+      <AnimatePresence initial={false}>
         {isHome ? (
           <motion.div
             key="home"
             initial={reduce ? false : { opacity: 0 }}
             animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className="public-editorial"
+            exit={{ opacity: 0, pointerEvents: "none" }}
+            transition={{ duration: reduce ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="public-editorial relative z-10 bg-[#0b0f16]"
           >
             <Outlet context={{ home, slug }} />
           </motion.div>
         ) : (
           <motion.div
             key="subpages"
-            initial={reduce ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className="relative isolate flex min-h-dvh flex-col"
+            initial={reduce ? false : { opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, pointerEvents: "none" }}
+            transition={{ duration: reduce ? 0 : 0.26, ease: [0.22, 1, 0.36, 1] }}
+            className="relative isolate z-20 flex min-h-dvh flex-col bg-[#0b0f16]"
           >
             <GuestBackdrop image={tenant.coverImageUrl || home.rooms.find((room) => room.coverUrl)?.coverUrl} />
             <header className="sticky top-0 z-30 px-3 pt-3 sm:px-8 sm:pt-5">
