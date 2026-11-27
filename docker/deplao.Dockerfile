@@ -26,7 +26,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund --ignore-scripts
 
 COPY . .
-RUN npm run rebuild:native && npm run build:electron && npm run build:web
+RUN node node_modules/electron/install.js && npm run rebuild:native && npm run build:electron && npm run build:web
 
 ENV NODE_ENV=production \
     DEPLAO_WEB=1 \
