@@ -334,6 +334,8 @@ public class ChannelConnection : Entity, ITenantOwned
     public string AccountId { get; set; } = "";
     public string AccountName { get; set; } = "";
     public bool IsEnabled { get; set; } = true;
+    /// <summary>Comma-separated thread/group IDs allowed for auto-reply; null/empty = allow all.</summary>
+    public string? AllowedThreadIds { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 

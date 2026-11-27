@@ -85,6 +85,24 @@ public class DeplaoWebhookService(
         if (string.IsNullOrWhiteSpace(threadId))
             return new(true, "no_thread", null, []);
 
+        if (!string.IsNullOrWhiteSpace(accountId))
+        {
+            var connFilter = await db.ChannelConnections
+                .FirstOrDefaultAsync(c => c.Channel == channelType && c.AccountId == accountId, ct);
+            if (connFilter != null && !connFilter.IsEnabled)
+                return new(true, "connection_disabled", null, []);
+            if (connFilter != null && !string.IsNullOrWhiteSpace(connFilter.AllowedThreadIds))
+            {
+                var allowed = connFilter.AllowedThreadIds
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (allowed.Length > 0 && !allowed.Contains(threadId, StringComparer.Ordinal))
+                {
+                    log.LogDebug("Ignored webhook for non-whitelisted thread {ThreadId} on {AccountId}", threadId, accountId);
+                    return new(true, "thread_not_whitelisted", null, []);
+                }
+            }
+        }
+
         var rawText = Str(msg, "text")?.Trim() ?? "";
         var text = !string.IsNullOrEmpty(rawText)
             ? rawText

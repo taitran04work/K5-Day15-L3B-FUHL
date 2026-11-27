@@ -197,6 +197,7 @@ public record DeplaoAccountsRequest(string? BaseUrl, string? ApiKey);
 public record DeplaoTestRequest(string ConversationId, string? Text, string? AccountId, string? Type = null);
 public record ChannelConnectionRequest(string Channel, string AccountId, string AccountName);
 public record ToggleConnectionRequest(bool IsEnabled);
+public record AllowedThreadsRequest(string[] AllowedThreadIds);
 
 [Route("api/app/channels/deplao")]
 public class DeplaoChannelsController(
@@ -356,6 +357,21 @@ public class DeplaoChannelsController(
         c.IsEnabled = req.IsEnabled;
         await Db.SaveChangesAsync();
         return new { id = c.Id, isEnabled = c.IsEnabled };
+    }
+
+    [HttpPut("connections/{id:guid}/allowed-threads")]
+    public async Task<object> SetAllowedThreads(Guid id, AllowedThreadsRequest req)
+    {
+        var c = await Db.ChannelConnections.FirstOrDefaultAsync(x => x.Id == id && x.TenantId == TenantId)
+            ?? throw AppException.NotFound("ChannelConnection");
+        var clean = (req.AllowedThreadIds ?? [])
+            .Select(x => x?.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        c.AllowedThreadIds = clean.Length == 0 ? null : string.Join(',', clean);
+        await Db.SaveChangesAsync();
+        return new { id = c.Id, allowedThreadIds = clean };
     }
 
     [HttpDelete("connections/{id:guid}")]
@@ -544,6 +560,9 @@ public class DeplaoChannelsController(
             accountId = c.AccountId,
             accountName = c.AccountName,
             isEnabled = c.IsEnabled,
+            allowedThreadIds = string.IsNullOrWhiteSpace(c.AllowedThreadIds)
+                ? Array.Empty<string>()
+                : c.AllowedThreadIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             createdAt = c.CreatedAt,
         }),
     };

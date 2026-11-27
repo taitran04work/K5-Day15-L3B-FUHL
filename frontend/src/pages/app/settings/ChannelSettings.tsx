@@ -3,7 +3,7 @@ import { Link } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { Copy, ExternalLink, Plus, QrCode, RefreshCw, Trash2, Webhook } from "lucide-react"
+import { Copy, ExternalLink, Plus, QrCode, RefreshCw, ShieldCheck, Trash2, Webhook } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -20,6 +20,7 @@ interface ChannelConnectionDto {
   accountId: string
   accountName: string
   isEnabled: boolean
+  allowedThreadIds?: string[]
   createdAt: string
 }
 
@@ -76,6 +77,11 @@ export default function ChannelSettings() {
   const [dTest, setDTest] = useState({ accountId: "", conversationId: "", text: "", type: "user" })
   const [recipients, setRecipients] = useState<DeplaoRecipient[]>([])
   const [accounts, setAccounts] = useState<DeplaoAccount[]>([])
+  const [whitelistConn, setWhitelistConn] = useState<ChannelConnectionDto | null>(null)
+  const [whitelistSelected, setWhitelistSelected] = useState<string[]>([])
+  const [whitelistSearch, setWhitelistSearch] = useState("")
+  const [whitelistOptions, setWhitelistOptions] = useState<DeplaoRecipient[]>([])
+  const [whitelistLoading, setWhitelistLoading] = useState(false)
   const [qrModalOpen, setQrModalOpen] = useState(false)
   const [qrTempId, setQrTempId] = useState<string | null>(null)
   const [qrState, setQrState] = useState<{ status: string; qrDataUrl: string; message?: string | null }>({ status: "idle", qrDataUrl: "" })
@@ -184,6 +190,35 @@ export default function ChannelSettings() {
     onError: (e) => toast.error(errorMessage(e)),
   })
 
+  const saveAllowedThreads = useMutation({
+    mutationFn: ({ id, allowedThreadIds }: { id: string; allowedThreadIds: string[] }) =>
+      api.put(`/api/app/channels/deplao/connections/${id}/allowed-threads`, { allowedThreadIds }),
+    onSuccess: () => {
+      toast.success("Đã lưu giới hạn nhóm / cuộc trò chuyện được phép trả lời")
+      setWhitelistConn(null)
+      void qc.invalidateQueries({ queryKey: ["deplao"] })
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  const openWhitelistModal = async (conn: ChannelConnectionDto) => {
+    setWhitelistConn(conn)
+    setWhitelistSelected(conn.allowedThreadIds ?? [])
+    setWhitelistSearch("")
+    setWhitelistLoading(true)
+    try {
+      const r = await api.get<{ ok: boolean; recipients: DeplaoRecipient[] }>(
+        `/api/app/channels/deplao/recipients?accountId=${encodeURIComponent(conn.accountId)}`
+      )
+      setWhitelistOptions(r.recipients ?? [])
+    } catch (e) {
+      toast.error(errorMessage(e))
+      setWhitelistOptions([])
+    } finally {
+      setWhitelistLoading(false)
+    }
+  }
+
   const saveGateway = useMutation({
     mutationFn: () =>
       api.put("/api/app/channels/deplao", {
@@ -276,16 +311,33 @@ export default function ChannelSettings() {
                   </p>
                 ) : (
                   <ul className="divide-y rounded-lg border">
-                    {connections.map((c) => (
+                    {connections.map((c) => {
+                      const wlCount = c.allowedThreadIds?.length ?? 0
+                      return (
                       <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-3">
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium">
                             <span className="mr-2 rounded bg-muted px-1.5 py-0.5 text-xs">{c.channel}</span>
                             {c.accountName}
                           </p>
-                          <p className="truncate font-mono text-xs text-muted-foreground">{c.accountId}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className="truncate font-mono text-xs text-muted-foreground">{c.accountId}</span>
+                            <span
+                              className={
+                                wlCount > 0
+                                  ? "rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400"
+                                  : "rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400"
+                              }
+                            >
+                              {wlCount > 0 ? `Chỉ trả lời ${wlCount} nhóm/chat` : "Trả lời tất cả"}
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" variant="outline" onClick={() => void openWhitelistModal(c)}>
+                            <ShieldCheck className="mr-1 size-3.5" />
+                            Chọn nhóm/chat
+                          </Button>
                           <Switch
                             checked={c.isEnabled}
                             onCheckedChange={(checked) => toggleConnection.mutate({ id: c.id, isEnabled: checked })}
@@ -296,7 +348,8 @@ export default function ChannelSettings() {
                           </Button>
                         </div>
                       </li>
-                    ))}
+                      )
+                    })}
                   </ul>
                 )}
 
@@ -495,6 +548,82 @@ export default function ChannelSettings() {
           </aside>
         </div>
       )}
+
+      <Dialog open={!!whitelistConn} onOpenChange={(open) => { if (!open) setWhitelistConn(null) }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Giới hạn nhóm / cuộc trò chuyện</DialogTitle>
+            <DialogDescription>
+              Chỉ những nhóm hoặc người bạn tick chọn dưới đây mới được AI tự động trả lời. Nếu bỏ trống tất cả, AI sẽ trả lời mọi tin nhắn gửi tới tài khoản <strong>{whitelistConn?.accountName}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Tìm theo tên nhóm hoặc số điện thoại..."
+              value={whitelistSearch}
+              onChange={(e) => setWhitelistSearch(e.target.value)}
+            />
+            <div className="max-h-72 overflow-y-auto rounded-lg border divide-y">
+              {whitelistLoading ? (
+                <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+                  <Spinner /> Đang tải danh sách nhóm / hội thoại...
+                </div>
+              ) : whitelistOptions.length === 0 ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">Không tìm thấy hội thoại nào trên tài khoản này.</p>
+              ) : (
+                whitelistOptions
+                  .filter((r) => {
+                    const q = whitelistSearch.trim().toLowerCase()
+                    if (!q) return true
+                    return r.displayName.toLowerCase().includes(q) || r.threadId.includes(q) || (r.phone ?? "").includes(q)
+                  })
+                  .map((r) => {
+                    const checked = whitelistSelected.includes(r.threadId)
+                    return (
+                      <label key={r.threadId} className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 hover:bg-muted/40">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <input
+                            type="checkbox"
+                            className="size-4 rounded border-input"
+                            checked={checked}
+                            onChange={(e) => {
+                              setWhitelistSelected((prev) =>
+                                e.target.checked ? [...prev, r.threadId] : prev.filter((id) => id !== r.threadId)
+                              )
+                            }}
+                          />
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">
+                              {r.displayName}
+                              {r.type === "group" && <span className="ml-1.5 rounded bg-muted px-1.5 py-0.5 text-[10px]">Nhóm</span>}
+                            </p>
+                            <p className="truncate font-mono text-[11px] text-muted-foreground">{r.threadId}</p>
+                          </div>
+                        </div>
+                      </label>
+                    )
+                  })
+              )}
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-2">
+              <Button variant="ghost" size="sm" onClick={() => setWhitelistSelected([])} disabled={whitelistSelected.length === 0}>
+                Bỏ chọn tất cả
+              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setWhitelistConn(null)}>Hủy</Button>
+                <Button
+                  size="sm"
+                  disabled={saveAllowedThreads.isPending || !whitelistConn}
+                  onClick={() => whitelistConn && saveAllowedThreads.mutate({ id: whitelistConn.id, allowedThreadIds: whitelistSelected })}
+                >
+                  {saveAllowedThreads.isPending && <Spinner />}
+                  Lưu ({whitelistSelected.length > 0 ? `${whitelistSelected.length} đã chọn` : "Trả lời tất cả"})
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={qrModalOpen} onOpenChange={closeQrModal}>
         <DialogContent className="sm:max-w-md">

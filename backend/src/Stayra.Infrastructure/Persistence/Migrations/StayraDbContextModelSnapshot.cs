@@ -268,6 +268,9 @@ namespace Stayra.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("AllowedThreadIds")
+                        .HasColumnType("text");
+
                     b.Property<string>("Channel")
                         .IsRequired()
                         .HasMaxLength(32)
