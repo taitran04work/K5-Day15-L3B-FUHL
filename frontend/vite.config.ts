@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
 const api = process.env.VITE_API_PROXY ?? 'http://localhost:8080'
+const deplao = process.env.VITE_DEPLAO_PROXY ?? 'http://localhost:27800'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -26,6 +27,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/api/browser': { target: deplao, changeOrigin: true },
+      '/deplao': {
+        target: deplao,
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/deplao/, '') || '/',
+      },
       '/api': { target: api, changeOrigin: true },
       '/files': { target: api, changeOrigin: true },
       '/hubs': { target: api, changeOrigin: true, ws: true },

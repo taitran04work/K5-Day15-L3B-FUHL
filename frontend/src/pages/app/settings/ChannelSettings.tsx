@@ -3,8 +3,9 @@ import { Link } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { Copy, ExternalLink, Plus, RefreshCw, Trash2, Webhook } from "lucide-react"
+import { Copy, ExternalLink, Plus, QrCode, RefreshCw, Trash2, Webhook } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
@@ -67,6 +68,7 @@ export default function ChannelSettings() {
   const [dForm, setDForm] = useState({ baseUrl: "", apiKey: "", webhookSecret: "" })
   const [dTest, setDTest] = useState({ conversationId: "", text: "" })
   const [accounts, setAccounts] = useState<DeplaoAccount[]>([])
+  const [deplaoModalOpen, setDeplaoModalOpen] = useState(false)
   const [oaForm, setOaForm] = useState({ appId: "", appSecret: "", oaId: "", oaSecretKey: "", accessToken: "", refreshToken: "" })
 
   const d = deplao.data
@@ -168,10 +170,16 @@ export default function ChannelSettings() {
               title="Kênh đã kết nối (Zalo / Facebook / Telegram)"
               description={d.connected ? "Các kết nối được lưu riêng theo từng homestay trong cơ sở dữ liệu." : "Cần cấu hình Gateway Deplao hoặc biến môi trường Deplao__ApiKey."}
               actions={
-                <Button size="sm" variant="outline" onClick={() => loadAccounts.mutate()} disabled={loadAccounts.isPending}>
-                  {loadAccounts.isPending ? <Spinner /> : <RefreshCw className="size-3.5" />}
-                  <span className="ml-1.5">{t("channels.deplaoLoadAccounts")}</span>
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" onClick={() => setDeplaoModalOpen(true)}>
+                    <QrCode className="mr-1.5 size-3.5" />
+                    Đăng nhập tài khoản mới
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => loadAccounts.mutate()} disabled={loadAccounts.isPending}>
+                    {loadAccounts.isPending ? <Spinner /> : <RefreshCw className="size-3.5" />}
+                    <span className="ml-1.5">{t("channels.deplaoLoadAccounts")}</span>
+                  </Button>
+                </div>
               }
             >
               <div className="space-y-4">
@@ -305,8 +313,8 @@ export default function ChannelSettings() {
             <div className="rounded-xl border p-5 text-sm">
               <p className="font-medium">Kết nối nhanh với Deplao T123</p>
               <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-muted-foreground">
-                <li>Đăng nhập Zalo, Facebook hoặc Telegram trong Deplao T123.</li>
-                <li>Bấm &ldquo;{t("channels.deplaoLoadAccounts")}&rdquo; để chọn tài khoản cho homestay.</li>
+                <li>Bấm &ldquo;Đăng nhập tài khoản mới&rdquo; để quét QR Zalo hoặc đăng nhập Facebook / Telegram.</li>
+                <li>Đóng cửa sổ hoặc bấm &ldquo;{t("channels.deplaoLoadAccounts")}&rdquo; để chọn tài khoản cho homestay.</li>
                 <li>Mọi tin nhắn từ các kênh đều đi vào cùng AI Agent &amp; Hộp thư.</li>
               </ol>
             </div>
@@ -324,6 +332,31 @@ export default function ChannelSettings() {
           </aside>
         </div>
       )}
+
+      <Dialog
+        open={deplaoModalOpen}
+        onOpenChange={(open) => {
+          setDeplaoModalOpen(open)
+          if (!open && d?.connected) loadAccounts.mutate()
+        }}
+      >
+        <DialogContent className="flex h-[85vh] flex-col gap-3 sm:max-w-5xl">
+          <DialogHeader className="flex-row items-center justify-between space-y-0 pr-8">
+            <div>
+              <DialogTitle>Đăng nhập tài khoản Social (Deplao T123)</DialogTitle>
+              <DialogDescription>
+                Quét mã QR Zalo hoặc đăng nhập Facebook / Telegram, sau đó đóng cửa sổ này để tải lại danh sách nick.
+              </DialogDescription>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <a href="/deplao/" target="_blank" rel="noreferrer">
+                Mở tab mới <ExternalLink className="ml-1.5 size-3.5" />
+              </a>
+            </Button>
+          </DialogHeader>
+          <iframe src="/deplao/" title="Deplao Web" className="w-full flex-1 rounded-md border bg-background" />
+        </DialogContent>
+      </Dialog>
     </Page>
   )
 }
