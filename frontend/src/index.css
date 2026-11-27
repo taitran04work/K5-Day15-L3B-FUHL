@@ -1,0 +1,203 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+  Stayra design tokens
+  - One accent colour (--brand), set per tenant at runtime. Everything else is neutral.
+  - Type scale: 13 / 14 / 16 / 20 / 28 / 40  ->  text-xs / sm / base / lg / xl / 2xl
+*/
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: var(--font-sans);
+
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.375rem;
+  --text-base: 1rem;
+  --text-base--line-height: 1.625rem;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.75rem;
+  --text-xl--line-height: 2.25rem;
+  --text-2xl: 2.5rem;
+  --text-2xl--line-height: 3rem;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-canvas: var(--canvas);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle: var(--subtle);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-soft: var(--brand-soft);
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 16px;
+}
+
+:root {
+  --brand: #1f5f4a;
+  --brand-foreground: #ffffff;
+  --brand-soft: color-mix(in oklab, var(--brand) 8%, white);
+
+  --background: #ffffff;
+  --canvas: #fafaf9;
+  --foreground: #111111;
+  --card: #ffffff;
+  --card-foreground: #111111;
+  --popover: #ffffff;
+  --popover-foreground: #111111;
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-foreground);
+  --secondary: #f4f4f3;
+  --secondary-foreground: #111111;
+  --muted: #f4f4f3;
+  --muted-foreground: #5f5f5c;
+  --subtle: #858581;
+  --accent: #f4f4f3;
+  --accent-foreground: #111111;
+  --destructive: #b42318;
+  --warning: #8a5300;
+  --success: #1d6b45;
+  --border: #e7e7e4;
+  --input: #dcdcd8;
+  --ring: var(--brand);
+  --radius: 10px;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv11";
+  }
+  body {
+    @apply bg-background text-foreground font-sans text-sm;
+  }
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--brand) 18%, white);
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-semibold tracking-tight text-foreground;
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@keyframes typing-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.responsive-table-frame {
+  container-type: inline-size;
+}
+
+@container (width < 38rem) {
+  .responsive-table,
+  .responsive-table tbody {
+    display: block;
+  }
+
+  .responsive-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .responsive-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 0.75rem 1rem;
+    padding: 0.875rem 1rem;
+  }
+
+  .responsive-table td {
+    padding: 0;
+    text-align: start;
+    overflow-wrap: anywhere;
+  }
+
+  .responsive-table td[data-label]::before {
+    display: block;
+    margin-bottom: 0.125rem;
+    color: var(--muted-foreground);
+    font-size: var(--text-xs);
+    content: attr(data-label);
+  }
+
+  .responsive-table td:is([data-row-title], [data-row-wide]) {
+    grid-column: 1 / -1;
+  }
+
+  .responsive-table td[data-row-title] {
+    order: -1;
+  }
+
+  .responsive-table td[data-row-action] {
+    grid-column: 2;
+    align-self: end;
+    justify-self: end;
+  }
+}

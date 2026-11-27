@@ -1,0 +1,80 @@
+name: stayra
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: stayra
+      POSTGRES_USER: stayra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stayra}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stayra -d stayra"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: ../docker/api.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=stayra;Username=stayra;Password=${POSTGRES_PASSWORD:-stayra}
+      Jwt__Key: ${JWT_KEY:-docker-dev-insecure-key-change-me-0123456789}
+      App__WebBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
+      Cors__Origins: ${WEB_BASE_URL:-http://localhost:5173}
+      Storage__Root: /data/uploads
+      Momo__PartnerCode: ${MOMO_PARTNER_CODE:-}
+      Momo__AccessKey: ${MOMO_ACCESS_KEY:-}
+      Momo__SecretKey: ${MOMO_SECRET_KEY:-}
+      Momo__IpnBaseUrl: ${PUBLIC_API_URL:-http://localhost:8080}
+      Momo__ReturnBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
+      Momo__Offline: ${MOMO_OFFLINE:-false}
+      Anthropic__ApiKey: ${ANTHROPIC_API_KEY:-}
+      Anthropic__Model: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      Embeddings__VoyageApiKey: ${VOYAGE_API_KEY:-}
+      Zalo__WebBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
+    ports:
+      - "8080:8080"
+    volumes:
+      - uploads:/data/uploads
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/web.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+
+  # Optional: expose the API publicly so MoMo IPN and Zalo webhooks can reach it.
+  #   docker compose --profile tunnel up
+  ngrok:
+    image: ngrok/ngrok:latest
+    profiles: ["tunnel"]
+    command: http api:8080
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    ports:
+      - "4040:4040"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  uploads:

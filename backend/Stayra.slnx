@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Stayra.Api/Stayra.Api.csproj" />
+    <Project Path="src/Stayra.Application/Stayra.Application.csproj" />
+    <Project Path="src/Stayra.Domain/Stayra.Domain.csproj" />
+    <Project Path="src/Stayra.Infrastructure/Stayra.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Stayra.Tests/Stayra.Tests.csproj" />
+  </Folder>
+</Solution>

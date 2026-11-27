@@ -1,0 +1,39 @@
+# ---- Stayra configuration ----------------------------------------------------
+# Copy to .env and adjust. `docker compose up --build` reads this file.
+
+# Runtime environment. "Development" enables the "Simulate payment" button,
+# the Zalo simulator and the Hangfire dashboard at /hangfire.
+ASPNETCORE_ENVIRONMENT=Development
+
+# Database
+POSTGRES_PASSWORD=stayra
+POSTGRES_PORT=5432
+
+# Signing key for owner/admin JWTs (32+ characters). Change in production.
+JWT_KEY=change-me-to-a-long-random-string-0123456789
+
+# Where the web app is served (used for CORS, redirects and links in messages)
+WEB_BASE_URL=http://localhost:5173
+# Public URL of the API (MoMo IPN + Zalo webhook). Use your ngrok URL to receive callbacks.
+PUBLIC_API_URL=http://localhost:8080
+
+# ---- AI concierge (Anthropic Claude) ----
+# Without a key the concierge answers with a limited offline assistant.
+ANTHROPIC_API_KEY=
+ANTHROPIC_MODEL=claude-sonnet-5-5
+
+# ---- Embeddings for policy search (Voyage AI, voyage-3, 1024 dims) ----
+# Without a key, policy search falls back to Postgres full-text search.
+VOYAGE_API_KEY=
+
+# ---- MoMo (developers.momo.vn sandbox) ----
+# Public sandbox test credentials from the MoMo developer docs.
+# Tenants can override these with their own keys under Settings → Payments.
+MOMO_PARTNER_CODE=MOMO
+MOMO_ACCESS_KEY=F8BBA842ECF85
+MOMO_SECRET_KEY=K951B6PE1waDMi640xX08PD3vg6EkVlz
+# Set to true to never call MoMo (payment cards then rely on "Simulate payment").
+MOMO_OFFLINE=false
+
+# ---- Optional: ngrok tunnel (docker compose --profile tunnel up) ----
+NGROK_AUTHTOKEN=

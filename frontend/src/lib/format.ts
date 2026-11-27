@@ -1,0 +1,73 @@
+import { formatDistanceToNowStrict, type Locale } from "date-fns"
+import { enUS, vi } from "date-fns/locale"
+import i18n from "@/i18n"
+
+export const TZ = "Asia/Ho_Chi_Minh"
+
+const lang = () => (i18n.language?.startsWith("vi") ? "vi" : "en")
+const locale = (): Locale => (lang() === "vi" ? vi : enUS)
+const intlLocale = () => (lang() === "vi" ? "vi-VN" : "en-GB")
+
+/** vi: "1.250.000 ₫" · en: "₫1,250,000" */
+export function money(amount: number | null | undefined) {
+  const v = Math.round(amount ?? 0)
+  if (lang() === "vi") return `${new Intl.NumberFormat("vi-VN").format(v)} ₫`
+  return `${v < 0 ? "-" : ""}₫${new Intl.NumberFormat("en-US").format(Math.abs(v))}`
+}
+
+export function number(n: number) {
+  return new Intl.NumberFormat(lang() === "vi" ? "vi-VN" : "en-US").format(n)
+}
+
+function fmt(d: string | Date, opts: Intl.DateTimeFormatOptions) {
+  return new Intl.DateTimeFormat(intlLocale(), { timeZone: TZ, ...opts }).format(typeof d === "string" ? new Date(d) : d)
+}
+
+/** "Fri, 18 Dec" */
+export const shortDate = (d: string | Date) => fmt(d, { weekday: "short", day: "numeric", month: "short" })
+/** "18 Dec 2026" */
+export const date = (d: string | Date) => fmt(d, { day: "numeric", month: "short", year: "numeric" })
+/** "14:00" */
+export const time = (d: string | Date) => fmt(d, { hour: "2-digit", minute: "2-digit", hour12: false })
+/** "18 Dec, 14:00" */
+export const dateTime = (d: string | Date) => fmt(d, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })
+/** "December 2026" */
+export const monthYear = (d: Date) => new Intl.DateTimeFormat(intlLocale(), { month: "long", year: "numeric" }).format(d)
+
+export function relative(d: string | Date) {
+  const v = typeof d === "string" ? new Date(d) : d
+  if (Math.abs(Date.now() - v.getTime()) < 45_000) return lang() === "vi" ? "vừa xong" : "just now"
+  return formatDistanceToNowStrict(v, { addSuffix: true, locale: locale() })
+}
+
+/** Local date (Asia/Ho_Chi_Minh) as yyyy-MM-dd */
+export function isoDate(d: Date | string) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(
+    typeof d === "string" ? new Date(d) : d,
+  )
+  return parts
+}
+
+/** Range label for a booking: nightly "18–21 Dec" + nights; hourly "18 Dec, 14:00–17:00" */
+export function stayLabel(mode: "Nightly" | "Hourly", startAt: string, endAt: string) {
+  if (mode === "Hourly") return `${shortDate(startAt)}, ${time(startAt)}–${time(endAt)}`
+  return `${shortDate(startAt)} – ${shortDate(endAt)}`
+}
+
+export function nights(startAt: string, endAt: string) {
+  const a = new Date(isoDate(startAt))
+  const b = new Date(isoDate(endAt))
+  return Math.max(1, Math.round((b.getTime() - a.getTime()) / 86_400_000))
+}
+
+export function initials(name?: string | null) {
+  if (!name) return "?"
+  const parts = name.trim().split(/\s+/)
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase()
+}
+
+export function phone(p?: string | null) {
+  if (!p) return ""
+  const d = p.replace(/\D/g, "")
+  return d.length === 10 ? `${d.slice(0, 4)} ${d.slice(4, 7)} ${d.slice(7)}` : p
+}

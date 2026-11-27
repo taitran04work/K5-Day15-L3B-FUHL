@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "ZgvWzO/FV5E=",
+  "success": true,
+  "projectFilePath": "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Domain\\Stayra.Domain.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\OS\\.nuget\\packages\\microsoft.extensions.dependencyinjection.abstractions\\8.0.0\\microsoft.extensions.dependencyinjection.abstractions.8.0.0.nupkg.sha512",
+    "C:\\Users\\OS\\.nuget\\packages\\microsoft.extensions.logging.abstractions\\8.0.0\\microsoft.extensions.logging.abstractions.8.0.0.nupkg.sha512",
+    "C:\\Users\\OS\\.nuget\\packages\\npgsql\\8.0.5\\npgsql.8.0.5.nupkg.sha512",
+    "C:\\Users\\OS\\.nuget\\packages\\pgvector\\0.3.2\\pgvector.0.3.2.nupkg.sha512"
+  ],
+  "logs": []
+}
