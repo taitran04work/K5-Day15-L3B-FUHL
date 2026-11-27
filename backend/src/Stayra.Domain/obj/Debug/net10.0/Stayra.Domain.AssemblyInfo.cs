@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Stayra.Domain")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e7fdf421d5b0237eeb52032c5cb65ab0d32c58aa")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c5ab60552be9c38c740b02fce3c91a2099a09979")]
 [assembly: System.Reflection.AssemblyProductAttribute("Stayra.Domain")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Stayra.Domain")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

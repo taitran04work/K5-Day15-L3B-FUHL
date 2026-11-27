@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Stayra.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+64d9e3dc7b63b0e245d930a791c2a321cf2711f6")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c5ab60552be9c38c740b02fce3c91a2099a09979")]
 [assembly: System.Reflection.AssemblyProductAttribute("Stayra.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Stayra.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
