@@ -1,5 +1,5 @@
-import { lazy, Suspense, type ReactNode } from "react"
-import { createBrowserRouter, Navigate, Outlet, RouterProvider } from "react-router"
+import { lazy, Suspense, useEffect, type ReactNode } from "react"
+import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation } from "react-router"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
 import { AuthProvider, useAuth } from "@/lib/auth"
@@ -53,12 +53,36 @@ function RequireRole({ roles, children }: { roles: string[]; children: ReactNode
   return <>{children}</>
 }
 
+function RouteTransitionShell() {
+  const { pathname, hash } = useLocation()
+
+  useEffect(() => {
+    if (!hash) {
+      window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior })
+    }
+  }, [pathname, hash])
+
+  const groupKey = pathname.startsWith("/app")
+    ? "app"
+    : pathname.startsWith("/admin")
+      ? "admin"
+      : pathname.startsWith("/h/")
+        ? pathname.split("/").slice(0, 3).join("/")
+        : pathname
+
+  return (
+    <div key={groupKey} className="animate-page-enter">
+      <Outlet />
+    </div>
+  )
+}
+
 function Root() {
   return (
     <AuthProvider>
       <TooltipProvider delayDuration={300}>
         <Suspense fallback={<FullPageSpinner />}>
-          <Outlet />
+          <RouteTransitionShell />
         </Suspense>
         <Toaster />
       </TooltipProvider>

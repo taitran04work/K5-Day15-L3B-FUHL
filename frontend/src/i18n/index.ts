@@ -4,13 +4,14 @@ import { initReactI18next } from "react-i18next"
 import en from "./en"
 import vi from "./vi"
 
-type Tree = { [k: string]: string | Tree }
+type Tree = { [k: string]: string | Tree | unknown[] }
 
 /** Vietnamese has a single plural form: expose each counted key as `key_other` too. */
 function withPlurals(tree: Tree, reference: Tree): Tree {
   const out: Tree = { ...tree }
   for (const [k, v] of Object.entries(reference)) {
-    if (typeof v === "object") out[k] = withPlurals((tree[k] as Tree) ?? {}, v)
+    if (Array.isArray(v)) out[k] = tree[k] ?? v
+    else if (typeof v === "object" && v !== null) out[k] = withPlurals((tree[k] as Tree) ?? {}, v)
     else if (k.endsWith("_other")) {
       const base = k.slice(0, -6)
       if (typeof tree[base] === "string") out[k] = tree[base]

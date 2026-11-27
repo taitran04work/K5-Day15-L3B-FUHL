@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "@fontsource-variable/inter";
@@ -64,6 +65,14 @@
   --brand-foreground: #ffffff;
   --brand-soft: color-mix(in oklab, var(--brand) 8%, white);
 
+  --font-editorial: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  --editorial-surface: #faf8f5;
+  --editorial-surface-alt: #f3f0ea;
+  --editorial-ink: #171614;
+  --editorial-muted: #66635d;
+  --editorial-border: #e5e0d8;
+  --editorial-scrim: rgba(16, 15, 13, 0.44);
+
   --background: #ffffff;
   --canvas: #fafaf9;
   --foreground: #111111;
@@ -98,9 +107,10 @@
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
     font-feature-settings: "cv11";
+    scroll-behavior: smooth;
   }
   body {
-    @apply bg-background text-foreground font-sans text-sm;
+    @apply bg-background text-foreground font-sans text-sm overflow-x-clip;
   }
   :focus-visible {
     outline: 2px solid var(--brand);
@@ -131,6 +141,32 @@
   .scrollbar-none::-webkit-scrollbar {
     display: none;
   }
+  .font-editorial {
+    font-family: var(--font-editorial);
+    letter-spacing: -0.015em;
+  }
+}
+
+.public-editorial {
+  --background: var(--editorial-surface);
+  --foreground: var(--editorial-ink);
+  --card: #ffffff;
+  --card-foreground: var(--editorial-ink);
+  --muted: var(--editorial-surface-alt);
+  --muted-foreground: var(--editorial-muted);
+  --border: var(--editorial-border);
+  --input: #d9d3c8;
+  --accent: var(--editorial-surface-alt);
+  --accent-foreground: var(--editorial-ink);
+  --secondary: var(--editorial-surface-alt);
+  --secondary-foreground: var(--editorial-ink);
+  background-color: var(--editorial-surface);
+  color: var(--editorial-ink);
+}
+
+[data-slot="dialog-overlay"] {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 @keyframes typing-dot {
@@ -143,6 +179,46 @@
   40% {
     opacity: 1;
     transform: translateY(-2px);
+  }
+}
+
+@keyframes stayra-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes stayra-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-page-enter {
+  animation: stayra-page-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-panel-enter {
+  animation: stayra-panel-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .animate-page-enter,
+  .animate-panel-enter {
+    animation: none;
   }
 }
 

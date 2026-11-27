@@ -46,8 +46,9 @@ export default function RoomPage() {
 
   if (room.isLoading)
     return (
-      <div className="mx-auto max-w-6xl space-y-6 px-4 py-10 sm:px-6">
-        <Skeleton className="h-8 w-64" />
+      <div className="mx-auto max-w-[1280px] space-y-6 px-4 py-10 sm:px-8">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-10 w-72" />
         <Skeleton className="h-[420px] w-full rounded-2xl" />
       </div>
     )
@@ -61,62 +62,77 @@ export default function RoomPage() {
   const r = room.data
   const quoteError = quote.error instanceof ApiError ? quote.error.message : null
   const canBook = quote.data?.available && !quote.isFetching && !quote.error
+  const unitPrice = r.supportsNightly && stay.mode === "Nightly" ? r.baseNightlyPrice : r.baseHourlyPrice
 
   return (
-    <div className="mx-auto max-w-6xl px-4 pb-10 pt-6 sm:px-6">
-      <Link to={`/h/${slug}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ChevronLeft className="size-4" /> {t("room.allRooms")}
+    <div className="mx-auto max-w-[1280px] px-4 pb-28 pt-8 sm:px-8 lg:pb-16">
+      <Link
+        to={`/h/${slug}`}
+        className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronLeft className="size-4 transition-transform duration-200 group-hover:-translate-x-0.5" />
+        <span>{t("room.allRooms")}</span>
       </Link>
-      <h1 className="mt-3 text-xl sm:text-2xl">{r.name}</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {[r.beds, t("room.upToGuests", { count: r.maxGuests }), r.areaM2 ? `${r.areaM2} m²` : null].filter(Boolean).join(" · ")}
-      </p>
 
-      <div className="mt-6">
+      <div className="mt-4 max-w-3xl">
+        <h1 className="font-editorial text-3xl font-normal leading-tight tracking-tight sm:text-5xl">{r.name}</h1>
+        <p className="mt-2.5 text-sm text-muted-foreground sm:text-base">
+          {[r.beds, t("room.upToGuests", { count: r.maxGuests }), r.areaM2 ? `${r.areaM2} m²` : null].filter(Boolean).join(" · ")}
+        </p>
+      </div>
+
+      <div className="mt-8">
         <Gallery photos={r.photos} title={r.name} />
       </div>
 
-      <div className="mt-10 grid gap-12 lg:grid-cols-[1fr_400px]">
-        <div className="min-w-0 space-y-10">
-          {r.description && <p className="max-w-2xl text-base leading-relaxed text-foreground/90">{r.description}</p>}
+      <div className="mt-12 grid gap-12 lg:grid-cols-[1fr_400px] lg:gap-16">
+        <div className="min-w-0 space-y-12">
+          {r.description && (
+            <p className="max-w-2xl text-base leading-relaxed text-foreground/90 sm:text-[17px]">{r.description}</p>
+          )}
+
           {r.amenities.length > 0 && (
-            <section className="border-t pt-8">
-              <h2 className="text-lg">{t("room.amenities")}</h2>
-              <AmenityList amenities={r.amenities} className="mt-5" />
+            <section className="border-t pt-10">
+              <h2 className="font-editorial text-2xl font-normal sm:text-3xl">{t("room.amenities")}</h2>
+              <AmenityList amenities={r.amenities} className="mt-6" />
             </section>
           )}
-          <section className="border-t pt-8">
-            <h2 className="text-lg">{t("room.pricesTitle")}</h2>
-            <dl className="mt-5 grid max-w-md gap-3 text-sm">
+
+          <section className="border-t pt-10">
+            <h2 className="font-editorial text-2xl font-normal sm:text-3xl">{t("room.pricesTitle")}</h2>
+            <dl className="mt-6 max-w-md divide-y border-y text-sm">
               {r.supportsNightly && (
-                <div className="flex justify-between">
+                <div className="flex justify-between py-3.5">
                   <dt className="text-muted-foreground">{t("room.nightlyRate")}</dt>
-                  <dd className="tabular">{money(r.baseNightlyPrice)}</dd>
+                  <dd className="font-medium tabular">{money(r.baseNightlyPrice)}</dd>
                 </div>
               )}
               {r.supportsHourly && (
-                <div className="flex justify-between">
+                <div className="flex justify-between py-3.5">
                   <dt className="text-muted-foreground">{t("room.hourlyRate", { count: r.minHours })}</dt>
-                  <dd className="tabular">{money(r.baseHourlyPrice)}</dd>
+                  <dd className="font-medium tabular">{money(r.baseHourlyPrice)}</dd>
                 </div>
               )}
               {r.extraGuestFee > 0 && (
-                <div className="flex justify-between">
+                <div className="flex justify-between py-3.5">
                   <dt className="text-muted-foreground">{t("room.extraGuest", { count: r.baseGuests })}</dt>
-                  <dd className="tabular">{money(r.extraGuestFee)}</dd>
+                  <dd className="font-medium tabular">{money(r.extraGuestFee)}</dd>
                 </div>
               )}
             </dl>
-            <p className="mt-3 text-xs text-muted-foreground">{t("room.pricesNote")}</p>
+            <p className="mt-4 max-w-md text-xs leading-relaxed text-muted-foreground">{t("room.pricesNote")}</p>
           </section>
         </div>
 
-        <aside className="lg:sticky lg:top-24 lg:h-fit">
-          <div className="space-y-4 rounded-xl border p-5 shadow-sm">
-            <p className="text-base">
-              <span className="font-semibold tabular">{money(r.supportsNightly && stay.mode === "Nightly" ? r.baseNightlyPrice : r.baseHourlyPrice)}</span>{" "}
-              <span className="text-sm text-muted-foreground">{stay.mode === "Nightly" ? t("room.perNight") : t("room.perHour")}</span>
-            </p>
+        <aside id="booking-panel" className="scroll-mt-24 lg:sticky lg:top-24 lg:h-fit">
+          <div className="space-y-4 rounded-2xl border bg-card p-6 shadow-[0_16px_40px_-24px_rgba(23,22,20,0.16)]">
+            <div className="flex items-baseline justify-between gap-2 border-b pb-4">
+              <p className="text-base">
+                <span className="text-2xl font-semibold tabular text-foreground">{money(unitPrice)}</span>{" "}
+                <span className="text-sm text-muted-foreground">{stay.mode === "Nightly" ? t("room.perNight") : t("room.perHour")}</span>
+              </p>
+            </div>
+
             <ModeToggle
               value={stay.mode}
               nightly={r.supportsNightly}
@@ -138,17 +154,17 @@ export default function RoomPage() {
             )}
             <GuestStepper value={stay.guests} max={r.maxGuests} onChange={(g) => setStay({ ...stay, guests: g })} />
 
-            <div className="min-h-[96px]">
+            <div className="min-h-[96px] rounded-xl bg-muted/60 p-4">
               {quote.isLoading ? (
-                <div className="space-y-2 pt-2">
+                <div className="space-y-2.5">
                   <Skeleton className="h-4 w-full" />
                   <Skeleton className="h-4 w-2/3" />
                   <Skeleton className="h-4 w-1/2" />
                 </div>
               ) : quoteError ? (
-                <p className="rounded-md bg-muted px-3 py-2.5 text-sm text-muted-foreground">{quoteError}</p>
+                <p className="text-sm text-muted-foreground">{quoteError}</p>
               ) : quote.data && !quote.data.available ? (
-                <p className="rounded-md bg-muted px-3 py-2.5 text-sm text-muted-foreground">{t("room.notAvailable")}</p>
+                <p className="text-sm text-muted-foreground">{t("room.notAvailable")}</p>
               ) : quote.data ? (
                 <div className={quote.isFetching ? "opacity-60 transition-opacity" : ""}>
                   <QuoteSummary quote={quote.data.quote} />
@@ -158,15 +174,46 @@ export default function RoomPage() {
 
             <Button
               size="lg"
-              className="w-full"
+              className="h-11 w-full rounded-xl"
               disabled={!canBook}
               onClick={() => navigate(`/h/${slug}/book?room=${r.id}&mode=${stay.mode}&start=${stay.start}&end=${stay.end}&guests=${stay.guests}`)}
             >
               {t("room.reserve")}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">{t("room.reserveHint", { minutes: tenant.holdMinutes })}</p>
+            <p className="text-center text-xs leading-relaxed text-muted-foreground">{t("room.reserveHint", { minutes: tenant.holdMinutes })}</p>
           </div>
         </aside>
+      </div>
+
+      {/* Mobile fixed bottom bar */}
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-[var(--editorial-surface)]/95 px-4 py-3 backdrop-blur-md sm:pr-20 lg:hidden">
+        <div className="mx-auto flex max-w-[1280px] items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">{t("room.fromPrice")}</p>
+            <p className="truncate text-sm font-semibold tabular text-foreground">
+              {money(quote.data?.quote.total ?? unitPrice)}{" "}
+              <span className="font-normal text-muted-foreground">
+                {quote.data?.quote
+                  ? t("room.totalFor", {
+                      units:
+                        quote.data.quote.mode === "Nightly"
+                          ? t("booking.nightsCount", { count: quote.data.quote.units })
+                          : t("booking.hoursCount", { count: quote.data.quote.units }),
+                    })
+                  : stay.mode === "Nightly"
+                    ? t("room.perNight")
+                    : t("room.perHour")}
+              </span>
+            </p>
+          </div>
+          <Button
+            type="button"
+            className="shrink-0 rounded-xl px-5"
+            onClick={() => document.getElementById("booking-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          >
+            {t("room.selectDates")}
+          </Button>
+        </div>
       </div>
     </div>
   )

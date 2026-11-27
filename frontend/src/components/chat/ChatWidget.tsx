@@ -133,7 +133,16 @@ export function ChatWidget({ slug, tenant }: { slug: string; tenant: PublicTenan
     messageAdded: (m: ChatMessage) => {
       if (m.role === "Tool") return
       if (m.role === "Owner") setConvStatus("HumanTakeover")
-      setMessages((prev) => mergeMessages(prev, [m]))
+      setMessages((prev) => {
+        if (m.role === "Guest") {
+          const localIdx = prev.findIndex((x) => x.id.startsWith("local-") && x.content === m.content)
+          if (localIdx !== -1) {
+            const withoutLocal = prev.filter((_, idx) => idx !== localIdx)
+            return mergeMessages(withoutLocal, [m])
+          }
+        }
+        return mergeMessages(prev, [m])
+      })
       if (m.role !== "Guest") setTyping(false)
     },
     typing: (v: boolean) => setTyping(v),
