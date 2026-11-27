@@ -388,27 +388,46 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
 
             var json = JsonSerializer.Deserialize<JsonElement>(raw);
             var list = new List<DeplaoRecipient>();
-            JsonElement arr = default;
-            if (json.ValueKind == JsonValueKind.Array) arr = json;
-            else if (json.TryGetProperty("data", out var d))
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            void ParseArray(JsonElement rootEl, string? defaultType = null)
             {
-                if (d.ValueKind == JsonValueKind.Array) arr = d;
-                else if (d.ValueKind == JsonValueKind.Object && d.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array) arr = items;
-            }
-            else if (json.TryGetProperty("items", out var items2) && items2.ValueKind == JsonValueKind.Array) arr = items2;
+                JsonElement arr = default;
+                if (rootEl.ValueKind == JsonValueKind.Array) arr = rootEl;
+                else if (rootEl.TryGetProperty("data", out var d))
+                {
+                    if (d.ValueKind == JsonValueKind.Array) arr = d;
+                    else if (d.ValueKind == JsonValueKind.Object && d.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array) arr = items;
+                }
+                else if (rootEl.TryGetProperty("items", out var items2) && items2.ValueKind == JsonValueKind.Array) arr = items2;
 
-            if (arr.ValueKind == JsonValueKind.Array)
-            {
+                if (arr.ValueKind != JsonValueKind.Array) return;
                 foreach (var item in arr.EnumerateArray())
                 {
-                    var tid = Str(item, "thread_id") ?? Str(item, "id");
-                    if (string.IsNullOrWhiteSpace(tid)) continue;
+                    var tid = Str(item, "thread_id") ?? Str(item, "group_id") ?? Str(item, "id");
+                    if (string.IsNullOrWhiteSpace(tid) || !seen.Add(tid)) continue;
                     var name = Str(item, "display_name") ?? Str(item, "name") ?? tid;
-                    var type = Str(item, "type") ?? "user";
+                    var type = Str(item, "type") ?? defaultType ?? "user";
                     var phone = Str(item, "phone");
                     list.Add(new DeplaoRecipient(tid, string.IsNullOrWhiteSpace(name) ? tid : name, type, phone));
                 }
             }
+
+            ParseArray(json);
+
+            // Also fetch groups so Zalo groups always appear even if not in recent 50 conversations
+            try
+            {
+                using var grpReq = new HttpRequestMessage(HttpMethod.Get, $"{ResolveBaseUrl(t)}/accounts/{Uri.EscapeDataString(accountId)}/groups?limit=50");
+                grpReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                var grpResp = await http.SendAsync(grpReq, ct);
+                if (grpResp.IsSuccessStatusCode)
+                {
+                    var grpJson = await grpResp.Content.ReadFromJsonAsync<JsonElement>(ct);
+                    ParseArray(grpJson, "group");
+                }
+            }
+            catch { /* ignore group fetch fallback */ }
+
             return (true, list, false, null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
