@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from "react"
-import { NavLink, Outlet, useLocation } from "react-router"
+import { useEffect, useRef, useState, type ReactNode } from "react"
+import { Link, NavLink, Outlet, useLocation } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useQuery } from "@tanstack/react-query"
 import {
@@ -23,12 +23,13 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { LanguageSwitch } from "@/components/LanguageSwitch"
+import { ThemeSwitch } from "@/components/layout/SystemTheme"
 import { useAuth } from "@/lib/auth"
-import { useBrand } from "@/lib/brand"
 import { api } from "@/lib/api"
 import { initials } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { ConversationSummary } from "@/lib/types"
+import { Logo } from "@/components/Logo"
 
 interface NavItem {
   to: string
@@ -41,7 +42,7 @@ interface NavItem {
 function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem[]; onNavigate?: () => void }) {
   return (
     <div className="space-y-0.5">
-      {title && <p className="px-3 pb-1 pt-4 text-xs font-medium text-subtle">{title}</p>}
+      {title && <p className="px-3 pb-1 pt-4 text-xs font-medium text-(--sidebar-muted)">{title}</p>}
       {items.map((item) => (
         <NavLink
           key={item.to}
@@ -50,8 +51,8 @@ function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem
           onClick={onNavigate}
           className={({ isActive }) =>
             cn(
-              "flex h-8 items-center gap-2.5 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground [&_svg]:size-4 [&_svg]:shrink-0",
-              isActive && "bg-muted font-medium text-foreground",
+              "flex min-h-9 items-center gap-2.5 rounded-md border-l-2 border-l-transparent px-3 text-sm text-(--sidebar-muted) transition-colors hover:bg-(--sidebar-hover) hover:text-(--sidebar-text) [&_svg]:size-4 [&_svg]:shrink-0",
+              isActive && "border-l-(--sidebar-accent) bg-(--sidebar-selected) font-semibold text-(--sidebar-text) hover:bg-(--sidebar-selected) [&_svg]:text-(--sidebar-accent)",
             )
           }
         >
@@ -70,21 +71,27 @@ export function Sidebar({ groups, header, onNavigate }: { groups: { title?: stri
   const { user, logout } = useAuth()
   const { t } = useTranslation()
   return (
-    <div className="flex h-full flex-col">
-      <div className="px-4 pb-2 pt-4">{header}</div>
-      <nav className="flex-1 overflow-y-auto px-2 pb-4" aria-label={t("nav.main")}>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="mx-4 mb-3 border-b border-(--sidebar-divider) pb-3 pt-3">
+        <Link to={user?.role === "PlatformAdmin" ? "/admin" : "/app"} className="mb-2 block w-fit rounded-md">
+          <Logo tone="light" className="h-16" />
+        </Link>
+        {header}
+      </div>
+      <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label={t("nav.main")}>
         {groups.map((g, i) => (
           <NavGroup key={i} title={g.title} items={g.items} onNavigate={onNavigate} />
         ))}
       </nav>
-      <div className="border-t p-2">
+      <div className="border-t border-(--sidebar-divider) px-3 py-2.5">
+        <ThemeSwitch showLabel className="mb-1 w-full border-transparent bg-transparent text-(--sidebar-muted) hover:bg-(--sidebar-hover) hover:text-(--sidebar-text)" />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex w-full items-center gap-2.5 rounded-md p-2 text-left hover:bg-muted">
-              <span className="flex size-7 items-center justify-center rounded-full bg-muted text-xs font-semibold">{initials(user?.name)}</span>
+            <button className="flex w-full items-center gap-2.5 rounded-md p-2 text-left hover:bg-(--sidebar-hover)">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-(--sidebar-selected) text-xs font-semibold text-(--sidebar-accent)">{initials(user?.name)}</span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{user?.name}</span>
-                <span className="block truncate text-xs text-muted-foreground">{user?.email}</span>
+                <span className="block truncate text-xs text-(--sidebar-muted)">{user?.email}</span>
               </span>
             </button>
           </DropdownMenuTrigger>
@@ -107,24 +114,35 @@ export function Sidebar({ groups, header, onNavigate }: { groups: { title?: stri
 function Shell({ groups, header, children }: { groups: { title?: string; items: NavItem[] }[]; header: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false)
   const { t } = useTranslation()
+  const { pathname } = useLocation()
+  const mainRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 })
+  }, [pathname])
+
   return (
-    <div className="min-h-dvh bg-background">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r bg-canvas lg:block">
+    <div className="min-h-dvh bg-canvas lg:flex lg:h-dvh lg:overflow-hidden">
+      <aside className="system-sidebar hidden w-64 shrink-0 border-r lg:flex lg:flex-col">
         <Sidebar groups={groups} header={header} />
       </aside>
-      <div className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur lg:hidden">
+      <div className="sticky top-0 z-20 flex h-16 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur lg:hidden">
         <Button variant="ghost" size="icon" onClick={() => setOpen(true)} aria-label={t("nav.openMenu")}>
           <Menu />
         </Button>
+        <Logo tone="auto" className="h-11" />
         <div className="min-w-0 flex-1">{header}</div>
+        <ThemeSwitch />
       </div>
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="left" className="w-72 p-0">
+        <SheetContent side="left" className="system-sidebar w-72 max-w-[calc(100%-2rem)] p-0 [&>button]:bg-(--sidebar-hover) [&>button]:text-(--sidebar-text)">
           <SheetTitle className="sr-only">{t("nav.main")}</SheetTitle>
           <Sidebar groups={groups} header={header} onNavigate={() => setOpen(false)} />
         </SheetContent>
       </Sheet>
-      <main className="lg:pl-60">{children}</main>
+      <main ref={mainRef} className="min-w-0 flex-1 lg:h-dvh lg:overflow-y-auto">
+        {children}
+      </main>
     </div>
   )
 }
@@ -132,7 +150,6 @@ function Shell({ groups, header, children }: { groups: { title?: string; items: 
 export function AppShell() {
   const { t } = useTranslation()
   const { user } = useAuth()
-  useBrand(user?.accentColor)
   const location = useLocation()
   const inbox = useQuery({
     queryKey: ["inbox", "attention"],
@@ -173,16 +190,13 @@ export function AppShell() {
 
   const header = (
     <div className="flex items-center justify-between gap-2">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-brand text-xs font-semibold text-brand-foreground">{initials(user?.tenantName)}</span>
-        <span className="truncate text-sm font-semibold">{user?.tenantName}</span>
-      </div>
+      <span className="truncate text-sm font-medium">{user?.tenantName}</span>
       {user?.tenantSlug && (
         <a
           href={`/h/${user.tenantSlug}`}
           target="_blank"
           rel="noreferrer"
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="shrink-0 rounded-md p-1.5 opacity-75 transition-opacity hover:opacity-100"
           title={t("nav.viewSite")}
           aria-label={t("nav.viewSite")}
         >
@@ -194,7 +208,7 @@ export function AppShell() {
 
   return (
     <Shell groups={groups} header={header}>
-      <div key={location.pathname.split("/")[2] ?? "home"} className="animate-in fade-in duration-200">
+      <div key={location.pathname.split("/")[2] ?? "home"} className="animate-page-enter">
         <Outlet />
       </div>
     </Shell>
@@ -203,7 +217,6 @@ export function AppShell() {
 
 export function AdminShell() {
   const { t } = useTranslation()
-  useBrand("#111111")
   const groups = [
     {
       items: [
@@ -213,11 +226,7 @@ export function AdminShell() {
     },
   ]
   const header = (
-    <div className="flex items-center gap-2.5">
-      <span className="flex size-7 items-center justify-center rounded-md bg-foreground text-xs font-semibold text-background">S</span>
-      <span className="text-sm font-semibold">Stayra</span>
-      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{t("nav.admin")}</span>
-    </div>
+    <span className="text-sm font-medium">{t("nav.admin")}</span>
   )
   return (
     <Shell groups={groups} header={header}>
@@ -228,5 +237,5 @@ export function AdminShell() {
 
 /** Standard page container for the owner/admin app. Wide by default; `narrow` for forms. */
 export function Page({ children, className, narrow }: { children: ReactNode; className?: string; narrow?: boolean }) {
-  return <div className={cn("mx-auto w-full px-4 py-6 sm:px-6 lg:px-10 lg:py-8", narrow ? "max-w-5xl" : "max-w-[1600px]", className)}>{children}</div>
+  return <div className={cn("stagger-enter mx-auto w-full px-4 py-6 sm:px-6 lg:px-10 lg:py-8", narrow ? "max-w-5xl" : "max-w-[1600px]", className)}>{children}</div>
 }

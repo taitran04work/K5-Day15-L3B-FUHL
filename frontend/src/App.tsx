@@ -1,10 +1,14 @@
-import { lazy, Suspense, useEffect, type ReactNode } from "react"
-import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation } from "react-router"
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react"
+import { createBrowserRouter, Navigate, RouterProvider, useLocation, useOutlet } from "react-router"
+import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { Toaster } from "@/components/ui/sonner"
+import { SystemTheme, SystemThemeScope } from "@/components/layout/SystemTheme"
 import { AuthProvider, useAuth } from "@/lib/auth"
-import { AdminShell, AppShell } from "@/components/layout/AppShell"
 import { Spinner } from "@/components/common"
+import { Logo } from "@/components/Logo"
+
+const AppShell = lazy(() => import("@/components/layout/AppShell").then((m) => ({ default: m.AppShell })))
+const AdminShell = lazy(() => import("@/components/layout/AppShell").then((m) => ({ default: m.AdminShell })))
 
 const Landing = lazy(() => import("@/pages/Landing"))
 const Login = lazy(() => import("@/pages/auth/Login"))
@@ -53,8 +57,40 @@ function RequireRole({ roles, children }: { roles: string[]; children: ReactNode
   return <>{children}</>
 }
 
+const CURTAIN_EASE = [0.76, 0, 0.24, 1] as const
+
+function usesSystemTheme(pathname: string) {
+  const path = pathname.toLowerCase().replace(/\/+$/, "")
+  return path !== "" && !path.startsWith("/h/") && path !== "/pay/return" && path !== "/dev/zalo-simulator"
+}
+
+/** Brand curtain that sweeps over the screen while one route group swaps for another. */
+function RouteCurtain({ system }: { system: boolean }) {
+  return (
+    <motion.div
+      aria-hidden
+      className="route-curtain pointer-events-none fixed inset-0 z-[100] flex items-center justify-center"
+      data-system={system || undefined}
+      initial={{ y: "100%" }}
+      animate={{ y: ["100%", "0%", "0%", "-100%"] }}
+      transition={{ duration: 1.15, times: [0, 0.36, 0.6, 1], ease: CURTAIN_EASE }}
+    >
+      <motion.span
+        className="flex items-center gap-3 text-[#f3ecdf]"
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: [0, 1, 1, 0], y: [16, 0, 0, -16] }}
+        transition={{ duration: 1.15, times: [0.2, 0.4, 0.58, 0.8] }}
+      >
+        <Logo tone="light" className={system ? "h-20" : "h-14"} />
+      </motion.span>
+    </motion.div>
+  )
+}
+
 function RouteTransitionShell() {
   const { pathname, hash } = useLocation()
+  const outlet = useOutlet()
+  const reduce = useReducedMotion()
 
   useEffect(() => {
     if (!hash) {
@@ -62,29 +98,48 @@ function RouteTransitionShell() {
     }
   }, [pathname, hash])
 
-  const groupKey = pathname.startsWith("/app")
-    ? "app"
-    : pathname.startsWith("/admin")
-      ? "admin"
-      : pathname.startsWith("/h/")
-        ? pathname.split("/").slice(0, 3).join("/")
-        : pathname
+  const managementSection = /^\/(app|admin)(?:\/|$)/i.exec(pathname)?.[1]?.toLowerCase()
+  const authRoute = /^\/(login|forgot-password|reset-password)\/?$/i.test(pathname)
+  const groupKey = managementSection ?? (authRoute ? "auth" : pathname)
+  const system = usesSystemTheme(pathname)
+
+  // show the curtain only for real navigations, not the first paint
+  const [prevKey, setPrevKey] = useState(groupKey)
+  const [navigated, setNavigated] = useState(false)
+  if (prevKey !== groupKey) {
+    // moving around one property's guest pages keeps its own branding: fade only, no Stayra curtain
+    const tenantOf = (k: string) => (k.startsWith("/h/") ? k.split("/").slice(0, 3).join("/") : null)
+    const sameTenant = tenantOf(prevKey) !== null && tenantOf(prevKey) === tenantOf(groupKey)
+    setPrevKey(groupKey)
+    setNavigated(!sameTenant)
+  }
 
   return (
-    <div key={groupKey} className="animate-page-enter">
-      <Outlet />
-    </div>
+    <>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={groupKey}
+          initial={reduce ? false : { opacity: 0, y: 28, scale: 0.985 }}
+          animate={reduce ? { opacity: 1, transition: { duration: 0 } } : { opacity: 1, y: 0, scale: 1, transition: { duration: 0.6, delay: 0.28, ease: [0.22, 1, 0.36, 1] } }}
+          exit={reduce ? { opacity: 1, transition: { duration: 0 } } : { opacity: 0, y: -24, scale: 0.985, transition: { duration: 0.38, ease: [0.4, 0, 1, 1] } }}
+        >
+          <SystemThemeScope enabled={system} />
+          <Suspense fallback={<FullPageSpinner />}>{outlet}</Suspense>
+        </motion.div>
+      </AnimatePresence>
+      {!reduce && navigated && <RouteCurtain key={groupKey} system={system} />}
+    </>
   )
 }
 
 function Root() {
+  const { pathname } = useLocation()
   return (
     <AuthProvider>
       <TooltipProvider delayDuration={300}>
-        <Suspense fallback={<FullPageSpinner />}>
+        <SystemTheme enabled={usesSystemTheme(pathname)}>
           <RouteTransitionShell />
-        </Suspense>
-        <Toaster />
+        </SystemTheme>
       </TooltipProvider>
     </AuthProvider>
   )

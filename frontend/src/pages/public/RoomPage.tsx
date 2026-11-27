@@ -75,7 +75,7 @@ export default function RoomPage() {
       </Link>
 
       <div className="mt-4 max-w-3xl">
-        <h1 className="font-editorial text-3xl font-normal leading-tight tracking-tight sm:text-5xl">{r.name}</h1>
+        <h1 className="text-3xl font-bold leading-tight tracking-tight sm:text-5xl">{r.name}</h1>
         <p className="mt-2.5 text-sm text-muted-foreground sm:text-base">
           {[r.beds, t("room.upToGuests", { count: r.maxGuests }), r.areaM2 ? `${r.areaM2} m²` : null].filter(Boolean).join(" · ")}
         </p>
@@ -93,13 +93,13 @@ export default function RoomPage() {
 
           {r.amenities.length > 0 && (
             <section className="border-t pt-10">
-              <h2 className="font-editorial text-2xl font-normal sm:text-3xl">{t("room.amenities")}</h2>
+              <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">{t("room.amenities")}</h2>
               <AmenityList amenities={r.amenities} className="mt-6" />
             </section>
           )}
 
           <section className="border-t pt-10">
-            <h2 className="font-editorial text-2xl font-normal sm:text-3xl">{t("room.pricesTitle")}</h2>
+            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">{t("room.pricesTitle")}</h2>
             <dl className="mt-6 max-w-md divide-y border-y text-sm">
               {r.supportsNightly && (
                 <div className="flex justify-between py-3.5">

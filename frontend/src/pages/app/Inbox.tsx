@@ -206,7 +206,7 @@ export default function Inbox() {
               )}
             </header>
             {conv.needsAttention && conv.handoffReason && (
-              <div className="border-b bg-amber-50/70 px-6 py-2.5 text-sm text-amber-900">
+              <div className="border-b bg-amber-50/70 px-6 py-2.5 text-sm text-amber-900 dark:bg-warning/10 dark:text-warning">
                 {t("inbox.handoffReason")}: {conv.handoffReason}
               </div>
             )}

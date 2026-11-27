@@ -15,9 +15,7 @@ export default function ForgotPassword() {
 
   if (mutation.isSuccess)
     return (
-      <AuthLayout title={t("auth.checkEmailTitle")} description={t("auth.checkEmailDescription", { email })} footer={<Link to="/login" className="underline underline-offset-4">{t("auth.backToSignIn")}</Link>}>
-        <span />
-      </AuthLayout>
+      <AuthLayout title={t("auth.checkEmailTitle")} description={t("auth.checkEmailDescription", { email })} footer={<Link to="/login" className="underline underline-offset-4">{t("auth.backToSignIn")}</Link>} />
     )
 
   return (

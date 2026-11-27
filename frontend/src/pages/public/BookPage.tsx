@@ -13,17 +13,12 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { ErrorState, Field, Spinner, useErrorMessage } from "@/components/common"
 import { Countdown, PaymentCard, PhotoTile, QuoteSummary } from "@/components/booking/BookingParts"
 import { api, ApiError } from "@/lib/api"
-import { money, stayLabel } from "@/lib/format"
+import { money, normalizePhone, rememberBookingPhone, stayLabel, vnPhone } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { BookingMode, GuestBooking, Payment, Quote, Room } from "@/lib/types"
 import { usePublic } from "./PublicLayout"
 
-export const vnPhone = /^(0|84)(3|5|7|8|9)\d{8}$/
-export const normalizePhone = (v: string) => v.replace(/[^\d]/g, "")
-
-export function rememberBookingPhone(code: string, phone: string) {
-  sessionStorage.setItem(`stayra.booking.${code}`, phone)
-}
+export { normalizePhone, rememberBookingPhone, vnPhone }
 
 type Step = "details" | "review" | "pay"
 
@@ -112,7 +107,7 @@ export default function BookPage() {
         </button>
       )}
 
-      <h1 className="mt-4 font-editorial text-3xl font-normal tracking-tight sm:text-4xl">
+      <h1 className="mt-4 text-3xl font-bold tracking-tight sm:text-4xl">
         {step === "pay" ? t("book.payTitle") : t("book.title")}
       </h1>
 
@@ -149,7 +144,7 @@ export default function BookPage() {
               <p className="text-xs uppercase tracking-wider text-muted-foreground">{t("book.summary")}</p>
               {room.data ? (
                 <>
-                  <p className="mt-0.5 truncate font-editorial text-xl font-normal text-foreground">{room.data.name}</p>
+                  <p className="mt-0.5 truncate text-xl font-semibold tracking-tight text-foreground">{room.data.name}</p>
                   <p className="text-sm text-muted-foreground">
                     {[q ? stayLabel(q.mode, q.startAt, q.endAt) : null, t("booking.guestsCount", { count: stay.guests })].filter(Boolean).join(" · ")}
                   </p>
@@ -231,7 +226,7 @@ export default function BookPage() {
 
             {home.cancellation && (
               <div>
-                <h2 className="font-editorial text-xl font-normal">{t("public.cancellationTitle")}</h2>
+                <h2 className="text-xl font-bold tracking-tight">{t("public.cancellationTitle")}</h2>
                 <ul className="mt-2.5 space-y-1.5 text-sm text-muted-foreground">
                   {home.cancellation.rules.map((r, i) => (
                     <li key={i}>

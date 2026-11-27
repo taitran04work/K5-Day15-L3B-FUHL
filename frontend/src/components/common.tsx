@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 import { ApiError } from "@/lib/api"
 import type { BookingStatus, PaymentStatus } from "@/lib/types"
+import { AnimatedValue } from "@/components/motion/CountUp"
 
 export function PageHeader({ title, description, actions, className }: { title: string; description?: ReactNode; actions?: ReactNode; className?: string }) {
   return (
@@ -71,22 +72,26 @@ export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn("size-4 animate-spin", className)} aria-hidden />
 }
 
+const pendingStatus = "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-warning/10 dark:text-warning dark:ring-warning/25"
+const failedStatus = "bg-red-50 text-red-800 ring-red-200 dark:bg-destructive/10 dark:text-destructive dark:ring-destructive/25"
+const positiveStatus = "bg-status-positive-soft text-status-positive ring-status-positive/20"
+
 const statusTone: Record<string, string> = {
-  Hold: "bg-amber-50 text-amber-800 ring-amber-200",
-  PendingDeposit: "bg-amber-50 text-amber-800 ring-amber-200",
-  Confirmed: "bg-brand-soft text-brand ring-brand/20",
+  Hold: pendingStatus,
+  PendingDeposit: pendingStatus,
+  Confirmed: positiveStatus,
   CheckedIn: "bg-foreground/[0.06] text-foreground ring-foreground/15",
   CheckedOut: "bg-muted text-muted-foreground ring-border",
   Cancelled: "bg-muted text-muted-foreground ring-border",
   Expired: "bg-muted text-muted-foreground ring-border",
-  NoShow: "bg-red-50 text-red-800 ring-red-200",
-  Created: "bg-amber-50 text-amber-800 ring-amber-200",
-  Paid: "bg-brand-soft text-brand ring-brand/20",
-  Failed: "bg-red-50 text-red-800 ring-red-200",
+  NoShow: failedStatus,
+  Created: pendingStatus,
+  Paid: positiveStatus,
+  Failed: failedStatus,
   Refunded: "bg-muted text-muted-foreground ring-border",
-  Pending: "bg-amber-50 text-amber-800 ring-amber-200",
-  Approved: "bg-brand-soft text-brand ring-brand/20",
-  Auto: "bg-brand-soft text-brand ring-brand/20",
+  Pending: pendingStatus,
+  Approved: positiveStatus,
+  Auto: positiveStatus,
   Rejected: "bg-muted text-muted-foreground ring-border",
 }
 
@@ -149,7 +154,7 @@ export function Stat({ label, value, hint, className }: { label: string; value: 
   return (
     <div className={cn("rounded-xl border bg-card px-5 py-4", className)}>
       <p className="text-sm text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xl font-semibold tabular tracking-tight">{value}</p>
+      <p className="mt-1 text-xl font-semibold tabular tracking-tight"><AnimatedValue value={value} /></p>
       {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
