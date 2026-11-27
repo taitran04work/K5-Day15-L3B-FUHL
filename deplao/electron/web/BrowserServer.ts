@@ -4,7 +4,7 @@ import { createReadStream } from 'fs';
 import { realpath, stat, readFile } from 'fs/promises';
 import * as path from 'path';
 import { operationsHtml } from './operations';
-import { ApiKeyService } from '../../src/services/api/auth/ApiKeyService';
+import ApiKeyService from '../../src/services/api/auth/ApiKeyService';
 
 export interface BrowserServerOptions {
   password: string;

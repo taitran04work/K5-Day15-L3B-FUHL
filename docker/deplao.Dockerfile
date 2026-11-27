@@ -3,6 +3,7 @@ FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
+    xauth \
     libnss3 \
     libatk1.0-0 \
     libatk-bridge2.0-0 \
@@ -22,10 +23,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund && npm run rebuild:native
+RUN npm ci --no-audit --no-fund --ignore-scripts
 
 COPY . .
-RUN npm run build:electron && npm run build:web
+RUN npm run rebuild:native && npm run build:electron && npm run build:web
 
 ENV NODE_ENV=production \
     DEPLAO_WEB=1 \
@@ -34,4 +35,6 @@ ENV NODE_ENV=production \
     DEPLAO_WEB_SECURE=0
 
 EXPOSE 27800
-CMD ["xvfb-run", "-a", "npm", "run", "start:web"]
+CMD ["xvfb-run", "-a", "--server-args=-screen 0 1024x768x24", \
+     "electron", "dist-electron/electron/bootstrap.js", \
+     "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
