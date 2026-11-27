@@ -16,6 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libgbm1 \
     libasound2 \
+    libcairo2 \
+    libgtk-3-0 \
+    libpango-1.0-0 \
     python3 \
     make \
     g++ \
@@ -35,6 +38,4 @@ ENV NODE_ENV=production \
     DEPLAO_WEB_SECURE=0
 
 EXPOSE 27800
-CMD ["xvfb-run", "-a", "--server-args=-screen 0 1024x768x24", \
-     "electron", "dist-electron/electron/bootstrap.js", \
-     "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
+CMD ["sh", "-c", "rm -f /tmp/.X99-lock && Xvfb :99 -screen 0 1024x768x24 -ac >/dev/null 2>&1 & sleep 1 && DISPLAY=:99 exec ./node_modules/.bin/electron dist-electron/electron/bootstrap.js --no-sandbox --disable-gpu --disable-dev-shm-usage"]
