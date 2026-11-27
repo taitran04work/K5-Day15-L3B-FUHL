@@ -4,31 +4,43 @@ Lát cắt và đối tượng người dùng được xác định trong [canva
 
 ## §0. Hiện tại việc này diễn ra thế nào *(guide 1.1)*
 
-Luồng thủ công giả định, cần kiểm qua các lần đặt phòng thật.
+Luồng thủ công hiện tại, đã kiểm chứng qua khảo sát **20 khách thuê homestay** (`G01`–`G20`) và **22 chủ/quản lý homestay** (`H01`–`H22` tại Sapa, Đà Nẵng, Hà Giang, Ninh Bình, Lai Châu):
 
-1. Khách nhắn homestay ngày muốn ở và số khách.
-2. Chủ hỏi bổ sung rồi kiểm tra lịch, sức chứa và báo giá.
-3. Khách chọn phòng, gửi tên và số điện thoại, rồi xác nhận thông tin.
-4. Chủ báo đã giữ phòng và gửi cách đặt cọc.
+1. **Khách nhắn hỏi phòng nhiều nơi cùng lúc:** Khách tìm homestay qua Facebook/TikTok/Google Maps rồi nhắn qua Messenger hoặc Zalo ngày muốn ở và số khách (`12/20 = 60%` khách phải nhắn hỏi từ `2–5` homestay mỗi chuyến đi).
+2. **Chủ nhà tra lịch & nhẩm giá thủ công:** **`21/22 (95,5%)`** chủ/quản lý homestay hiện quản lý lịch phòng bằng **Sổ tay, Excel hoặc Google Sheets** (phân tán với Booking/Agoda/Airbnb), và **`19/22 (86,4%)`** trả lời khách **thủ công**. Chủ nhà phải mở file Excel/Sheet đối chiếu lịch trống, tự cộng phụ thu cuối tuần/lễ/thêm người rồi mới nhắn lại khách.
+3. **Khách chờ đợi và hỏi đi hỏi lại nhiều lượt:** **`14/20 (70%)`** khách phải chờ từ `5 phút` đến `4 giờ+` mới nhận được phản hồi đầu tiên (trong đó `8/20 = 40%` chờ trên `15 phút` hoặc không được phản hồi). **`8/16 (50%)`** khách có nhắn hỏi xác nhận không nhận đủ thông tin phòng trống và tổng giá ngay lần đầu, phải hỏi lại nhiều lượt về phụ thu và điều kiện cọc.
+4. **Chốt giữ phòng & cập nhật lịch bằng tay:** Khi khách chọn phòng và chuyển cọc, chủ nhà phải tự mở lại Excel/Sheet/Sổ tay cập nhật bằng tay, dẫn tới **`19/22 (86,4%)`** cơ sở từng báo nhầm phòng trống hoặc đặt trùng phòng.
 
-Nghiên cứu sẽ ghi nhận kênh và công cụ chủ nhà đã dùng, thời điểm có phản hồi đầu tiên và thời điểm xác nhận giữ phòng. [Kế hoạch thu bằng chứng](evidence/hypothesis.md)
+Chi tiết câu hỏi, dữ liệu ẩn danh và trích dẫn nguyên văn: [Kế hoạch & Giả thuyết](evidence/hypothesis.md) · [Tổng hợp bằng chứng](evidence/summary.md) · [Dữ liệu khảo sát](evidence/survey/questions.md)
 
 ## §1. Người dùng & bằng chứng *(guide 1.1, 1.2)*
 
-- **Người dùng chính.** Khách du lịch đã chọn một homestay và muốn đặt một phòng theo đêm qua tin nhắn.
-- **Việc cần làm.** Chọn phòng còn trống, xem giá và tiền cọc, xác nhận bản tóm tắt để nhận mã giữ phòng và thẻ đặt cọc.
-- **Pain giả định.** Khách chờ chủ nhà tra lịch, báo giá và phản hồi nhiều lần mới biết yêu cầu đã được giữ chỗ hay chưa.
-- **Căn cứ hiện có.** Pine Hill có 6 phòng trong seed để minh họa nhiều lựa chọn. Việc khách phải chờ và mức ảnh hưởng cần được kiểm bằng lần đặt gần nhất của khách thật. [Seed phòng](backend/src/Stayra.Infrastructure/Persistence/DatabaseSetup.cs) · [Hồ sơ bằng chứng](evidence/summary.md)
+- **Người dùng chính.** Khách du lịch đã chọn một homestay và muốn đặt một phòng theo đêm qua tin nhắn (cùng người hưởng lợi vận hành trực tiếp là chủ/quản lý homestay quy mô `1–20+` phòng).
+- **Việc cần làm.** Chọn phòng còn trống, xem tổng giá minh bạch (gồm cả phụ thu cuối tuần/thêm người) và tiền cọc 30%, xác nhận bản tóm tắt để nhận mã giữ phòng (15 phút) và thẻ đặt cọc MoMo.
+- **Pain đã kiểm chứng.**
+  - **Phía khách thuê (`n = 20`):** **`16/20 (80%)`** gặp vấn đề khi hỏi/đặt phòng (`40%` phản hồi chậm, `35%` phải hỏi lại nhiều lần, `35%` không rõ giá/phụ thu, `25%` khó liên hệ ngoài giờ). Hệ quả là **`8/20 (40%)` đã từng từ bỏ đặt một homestay** giữa chừng vì chờ quá lâu hoặc báo giá thiếu minh bạch lúc chốt.
+  - **Phía chủ homestay (`n = 22`):** **`19/22 (86,4%)`** mất từ **`1 đến trên 4 giờ/ngày`** trả lời tin nhắn (`59,1%` mất `2–4+ giờ/ngày`); **`20/22 (90,9%)`** bị quá tải câu hỏi lặp lại và bỏ sót/phản hồi chậm tin nhắn trong 30 ngày qua; **`9/22 (40,9%)`** biết chắc chắn mình **đã mất khách do phản hồi chậm**.
+- **Căn cứ hiện có.** Bộ khảo sát thực tế **N = 42 người ngoài nhóm** (`20` khách thuê `G01`–`G20` và `22` chủ/quản lý `H01`–`H22`) kèm 8 trích dẫn nguyên văn tại [Hồ sơ bằng chứng](evidence/summary.md), kết hợp dữ liệu seed 6 hạng phòng của Pine Hill Homestay trong [DatabaseSetup.cs](backend/src/Stayra.Infrastructure/Persistence/DatabaseSetup.cs).
 
 ## §2. Impact & quyết định chọn *(guide 1.3)*
 
 | Hướng | Việc khách hoàn thành | Quyết định |
 |---|---|---|
 | Tra lịch và giá qua chat | Biết phòng nào còn trống và giá dự kiến | Giữ làm bước trong luồng đặt phòng |
-| Đặt mới qua chat đến lúc giữ phòng | Nhận mã giữ phòng và thẻ cọc sau khi xác nhận | Chọn vì khách có ngay kết quả để tiến hành đặt cọc |
-| Quản lý đặt phòng sau khi chốt | Đổi hoặc hủy đặt phòng đang có | Để ngoài lượt đánh giá này vì dùng mã đặt phòng, quyền thao tác và trạng thái khác |
+| Đặt mới qua chat đến lúc giữ phòng | Nhận mã giữ phòng và thẻ cọc sau khi xác nhận | **Chọn** vì giải quyết trọn vẹn nút thắt từ lúc hỏi đến lúc khóa lịch giữ chỗ 15 phút & hiển thị thẻ cọc 30% |
+| Quản lý đặt phòng sau khi chốt | Đổi hoặc hủy đặt phòng đang có | Hỗ trợ tra cứu đơn và báo giá hoàn tiền theo `CS-05` (xác thực `code + phone`), chuyển chủ hộ duyệt ngoại lệ |
 
-Đo thời gian từ tin nhắn đầu tiên đến khi giữ phòng. Ước tính impact tháng bằng số khách × số lần đặt mỗi khách × chênh lệch thời gian mỗi lần đặt. Các thừa số và tỷ lệ khách gặp pain còn chờ số liệu.
+**Đo lường & Ước tính Impact hàng tháng (có số từ khảo sát `evidence/summary.md`):**
+
+- **1) Tiết kiệm thời gian chờ & hỏi lại cho Khách đặt phòng (trên 1 homestay quy mô cơ sở):**
+  - Theo khảo sát chủ hộ (`n = 22`), mức trung vị số cuộc hội thoại hỏi phòng là **`~10 cuộc/ngày`** (`59,1%` ở mức `5–15 cuộc/ngày`, `22,7%` ở mức `16–50 cuộc/ngày`) → tương đương **`~300 phiên hỏi phòng/tháng`** cho một homestay quy mô vừa (`6–10 phòng` như Pine Hill).
+  - Hiện tại: Khách mất trung bình **`~25 phút/lần hỏi-đặt`** (gồm thời gian chờ phản hồi đầu tiên `5–60+ phút` ở `70%` khách + `3–5 lượt` nhắn qua lại hỏi phụ thu/chính sách ở `50%` khách).
+  - Khi dùng AI Concierge Stayra: Thời gian từ tin nhắn đầu tiên đến khi nhận bản tóm tắt giá trọn gói + mã giữ phòng và thẻ cọc MoMo rút xuống còn **`~2 phút`** (`2–3 lượt chat`, phản hồi `< 10 giây/lượt`) → tiết kiệm **`~23 phút/phiên`**.
+  - **Impact cho khách trên 1 homestay/tháng:** `300 phiên/tháng × 80% tỉ lệ gặp pain × 23 phút` = **`5.520 phút/tháng` (~`92 giờ chờ đợi/tháng` được loại bỏ cho khách)**.
+- **2) Tiết kiệm giờ công tra lịch Excel/Sheet & giữ chân khách cho Chủ homestay:**
+  - Hiện tại: `86,4%` chủ hộ mất `1–4+ giờ/ngày` (trung bình **`~2,5 giờ/ngày = 75 giờ/tháng`**) để mở Sổ tay/Excel/Sheet tra phòng trống và trả lời câu hỏi lặp lại (`90,9%` gặp).
+  - Chatbot tự động hóa ~`80%` luồng tra lịch, báo giá trọn gói, giải đáp nội quy và tạo bản nháp giữ phòng → tiết kiệm cho chủ hộ **`~2 giờ/ngày = 60 giờ công/tháng`** mỗi homestay.
+  - Đồng thời, việc phản hồi tức thì 24/7 và báo giá minh bạch ngay lượt đầu giúp ngăn chặn trực tiếp nguy cơ **mất khách do phản hồi chậm** (vấn đề mà **`40%` khách thuê** từng bỏ cuộc và **`40,9%` chủ hộ** xác nhận đã mất đơn).
 
 ## §3. Giải pháp tương tự *(guide 2.1)*
 
@@ -139,3 +151,4 @@ Các kịch bản dưới đây kết hợp kiểm thử luồng đặt phòng (
 |---|---|---|
 | 27/11/2026 | Xác định lại lát cắt từ nhu cầu của nhóm | Tập trung luồng khách đặt homestay qua chatbot đến khi nhận mã giữ phòng và thẻ cọc. |
 | 27/11/2026 (17:50) | Hoàn thiện lát cắt Python (`codebase/`), `eval/` (24 câu, 4 metric) & chạy `run-1`, `run-2`; cải tiến `concierge.md` & `ChatWidget.tsx` | Nối model thật `claude-haiku-5-5`, đo được 23/24 đạt (96%) ở cả 2 lượt và hợp nhất nội dung nhánh `cp1`. |
+| 27/11/2026 (23:55) | Hoàn thiện hồ sơ bằng chứng `evidence/summary.md`, `evidence/survey/*` (`n = 20` khách, `n = 22` chủ) và cập nhật `spec.md` §0–§2 | Kiểm chứng giả thuyết bằng dữ liệu khảo sát thật (80% khách gặp pain, 40% từng bỏ cuộc; 95,5% chủ tra lịch Excel/Sổ tay, 86,4% mất 1–4+ giờ/ngày) và lượng hóa Impact/tháng. |
