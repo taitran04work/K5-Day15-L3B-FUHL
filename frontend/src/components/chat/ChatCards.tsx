@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { KeyValue, Spinner, StatusBadge } from "@/components/common"
 import { Lightbox, PhotoTile, useDevConfig } from "@/components/booking/BookingParts"
 import { api } from "@/lib/api"
-import { money, stayLabel } from "@/lib/format"
+import { useLocalizedFormat } from "@/lib/format"
 import type { BookingMode, BookingStatus, CardData, Payment, Photo } from "@/lib/types"
 
 type Any = Record<string, unknown>
@@ -17,6 +17,7 @@ const n = (v: unknown) => (typeof v === "number" ? v : 0)
 
 function RoomCards({ data, slug, onQuickReply }: { data: Any; slug: string; onQuickReply?: (text: string) => void }) {
   const { t } = useTranslation()
+  const { money } = useLocalizedFormat()
   const rooms = (data.rooms as Any[]) ?? []
   return (
     <div className="-mx-1 flex snap-x gap-2.5 overflow-x-auto px-1 pb-1 scrollbar-none">
@@ -74,6 +75,7 @@ function GalleryCard({ data }: { data: Any }) {
 
 function QuoteCard({ data }: { data: Any }) {
   const { t } = useTranslation()
+  const { money, stayLabel } = useLocalizedFormat()
   const mode = s(data.mode) as BookingMode
   return (
     <div className="rounded-xl border bg-background p-3.5">
@@ -95,6 +97,7 @@ function QuoteCard({ data }: { data: Any }) {
 
 function BookingSummary({ data }: { data: Any }) {
   const { t } = useTranslation()
+  const { money, stayLabel } = useLocalizedFormat()
   return (
     <div className="rounded-xl border bg-background p-3.5">
       <div className="flex items-center justify-between gap-2">
@@ -118,6 +121,7 @@ function BookingSummary({ data }: { data: Any }) {
 
 function PaymentBlock({ data, slug }: { data: Any; slug: string }) {
   const { t } = useTranslation()
+  const { money } = useLocalizedFormat()
   const dev = useDevConfig()
   const qc = useQueryClient()
   const [showQr, setShowQr] = useState(false)

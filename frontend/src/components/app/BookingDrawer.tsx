@@ -142,6 +142,10 @@ export function BookingDrawer({ id, onOpenChange }: { id: string | null; onOpenC
   const b = d?.booking
   const canCheckIn = b?.status === "Confirmed"
   const canCheckOut = b?.status === "CheckedIn" || b?.status === "Confirmed"
+  const canCashCheckOut = b?.status === "CheckedIn" && b.balance > 0
+  const canNoShow = b?.status === "Confirmed" && new Date(b.startAt) < new Date()
+  const canCancel = !!b && ["Hold", "PendingDeposit", "Confirmed"].includes(b.status)
+  const hasMoreActions = Boolean(d?.conversationId) || canCashCheckOut || canNoShow || canCancel
   const busy = checkIn.isPending || checkOut.isPending
 
   return (
@@ -192,7 +196,7 @@ export function BookingDrawer({ id, onOpenChange }: { id: string | null; onOpenC
                     {sendRemaining.isPending && <Spinner />} {t("bookings.sendPaymentLink")}
                   </Button>
                 )}
-                {(d.conversationId || ["Hold", "PendingDeposit", "Confirmed", "CheckedIn"].includes(b.status)) && (
+                {hasMoreActions && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button size="icon-sm" variant="outline" aria-label={t("common.more")}>
@@ -207,15 +211,15 @@ export function BookingDrawer({ id, onOpenChange }: { id: string | null; onOpenC
                           </Link>
                         </DropdownMenuItem>
                       )}
-                      {b.status === "CheckedIn" && b.balance > 0 && (
+                      {canCashCheckOut && (
                         <DropdownMenuItem onClick={() => checkOut.mutate({ settledInCash: true })}>{t("bookings.checkOutCash")}</DropdownMenuItem>
                       )}
-                      {b.status === "Confirmed" && new Date(b.startAt) < new Date() && (
+                      {canNoShow && (
                         <DropdownMenuItem onClick={() => noShow.mutate(undefined)}>{t("bookings.markNoShow")}</DropdownMenuItem>
                       )}
-                      {["Hold", "PendingDeposit", "Confirmed"].includes(b.status) && (
+                      {canCancel && (
                         <>
-                          <DropdownMenuSeparator />
+                          {(d.conversationId || canNoShow) && <DropdownMenuSeparator />}
                           <DropdownMenuItem variant="destructive" onClick={() => setCancelOpen(true)}>
                             {t("bookings.cancelBooking")}
                           </DropdownMenuItem>

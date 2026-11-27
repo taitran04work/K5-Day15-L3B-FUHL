@@ -8,12 +8,13 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Page } from "@/components/layout/AppShell"
 import { ErrorState, PageHeader, Section, Stat, StatusBadge } from "@/components/common"
 import { BookingDrawer } from "@/components/app/BookingDrawer"
-import { BarSeries } from "@/components/app/BarSeries"
+import { BarSeries, type SeriesChartMode } from "@/components/app/BarSeries"
+import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { useInboxHub } from "@/lib/realtime"
-import { money, number, shortDate, stayLabel } from "@/lib/format"
-import type { Booking } from "@/lib/types"
+import { money, relative, shortDate, stayLabel } from "@/lib/format"
+import type { Booking, ConversationSummary } from "@/lib/types"
 
 interface OverviewData {
   date: string
@@ -63,8 +64,28 @@ export default function Overview() {
   const { user } = useAuth()
   const qc = useQueryClient()
   const [selected, setSelected] = useState<string | null>(null)
+  const [chartMode, setChartMode] = useState<SeriesChartMode>("line")
   const data = useQuery({ queryKey: ["overview"], queryFn: () => api.get<OverviewData>("/api/app/overview"), refetchInterval: 60_000 })
-  useInboxHub({ bookingChanged: () => void qc.invalidateQueries({ queryKey: ["overview"] }) })
+  const conversations = useQuery({
+    queryKey: ["inbox", "list", ""],
+    queryFn: () => api.get<ConversationSummary[]>("/api/app/inbox/conversations"),
+    refetchInterval: 60_000,
+  })
+  useInboxHub({
+    bookingChanged: () => void qc.invalidateQueries({ queryKey: ["overview"] }),
+    messageAdded: () => void qc.invalidateQueries({ queryKey: ["inbox", "list"] }),
+    conversationUpdated: () => {
+      void qc.invalidateQueries({ queryKey: ["overview"] })
+      void qc.invalidateQueries({ queryKey: ["inbox", "list"] })
+    },
+  })
+
+  const recentGuests = [...(conversations.data ?? [])]
+    .sort((a, b) => {
+      if (a.needsAttention !== b.needsAttention) return a.needsAttention ? -1 : 1
+      return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()
+    })
+    .slice(0, 2)
 
   const hour = new Date().getHours()
   const greeting = hour < 12 ? t("overview.morning") : hour < 18 ? t("overview.afternoon") : t("overview.evening")
@@ -87,34 +108,69 @@ export default function Overview() {
         </div>
       ) : (
         <div className="space-y-6">
-          {(d.pendingApprovals > 0 || d.needsAttention > 0) && (
+          {d.pendingApprovals > 0 && (
             <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-warning/30 dark:bg-warning/10">
               <p className="text-sm text-amber-900 dark:text-warning">
-                {[d.pendingApprovals > 0 && t("overview.pendingApprovals", { count: d.pendingApprovals }), d.needsAttention > 0 && t("overview.needsAttention", { count: d.needsAttention })]
-                  .filter(Boolean)
-                  .join(" · ")}
+                {t("overview.pendingApprovals", { count: d.pendingApprovals })}
               </p>
-              <div className="flex gap-2">
-                {d.pendingApprovals > 0 && (
-                  <Button size="sm" variant="outline" asChild>
-                    <Link to="/app/bookings?tab=upcoming">{t("overview.review")}</Link>
-                  </Button>
-                )}
-                {d.needsAttention > 0 && (
-                  <Button size="sm" variant="outline" asChild>
-                    <Link to="/app/inbox">{t("overview.openInbox")}</Link>
-                  </Button>
-                )}
-              </div>
+              <Button size="sm" variant="outline" asChild>
+                <Link to="/app/bookings?tab=upcoming">{t("overview.review")}</Link>
+              </Button>
             </div>
           )}
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-3">
             <Stat label={t("overview.occupancyToday")} value={`${Math.round(d.occupancyToday)}%`} hint={t("overview.inHouse", { count: d.inHouse, rooms: d.rooms })} />
             <Stat label={t("overview.occupancy7")} value={`${Math.round(d.occupancyNext7)}%`} hint={t("overview.next7Hint")} />
             <Stat label={t("overview.revenue30")} value={money(d.revenue30)} hint={t("overview.revenueHint")} />
-            <Stat label={t("overview.botHandled", { count: d.bot.handledByBot })} value={t("overview.hoursSaved", { hours: number(d.bot.hoursSaved) })} hint={t("overview.botHint", { bookings: d.bot.bookings, conversations: d.bot.conversations })} />
           </div>
+
+          <Section
+            title={t("overview.guestMessages")}
+            actions={
+              <div className="flex items-center gap-3">
+                {d.needsAttention > 0 && (
+                  <span className="rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:text-warning">
+                    {t("overview.needsHelpCount", { count: d.needsAttention })}
+                  </span>
+                )}
+                <Link to="/app/inbox" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+                  {t("overview.viewMore")} <ArrowRight className="size-3.5" />
+                </Link>
+              </div>
+            }
+          >
+            {recentGuests.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">{t("overview.noMessages")}</p>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2">
+                {recentGuests.map((c) => {
+                  const guestLabel = c.guestName || (c.channel === "Zalo" ? t("inbox.zaloGuest") : t("inbox.webGuest"))
+                  return (
+                    <Link
+                      key={c.id}
+                      to={`/app/inbox?c=${c.id}`}
+                      className="flex flex-col justify-between gap-2 rounded-lg border bg-background/60 px-4 py-3 transition-colors hover:border-foreground/20 hover:bg-muted/50"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
+                          {c.needsAttention && <span className="size-2 shrink-0 rounded-full bg-amber-500" />}
+                          <span className="truncate">{guestLabel}</span>
+                          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground">
+                            {c.channel === "Zalo" ? "Zalo" : t("inbox.website")}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-xs text-subtle tabular">{relative(c.lastMessageAt)}</span>
+                      </div>
+                      {c.lastMessagePreview && (
+                        <p className="line-clamp-1 text-sm text-muted-foreground">{c.lastMessagePreview}</p>
+                      )}
+                    </Link>
+                  )
+                })}
+              </div>
+            )}
+          </Section>
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
             <Section title={t("overview.arrivals")} description={t("overview.arrivalsCount", { count: d.checkIns.length })}>
@@ -135,15 +191,51 @@ export default function Overview() {
             </Section>
           </div>
 
-          <Section title={t("overview.revenueTitle")} description={t("overview.revenueDescription")}>
+          <Section
+            title={t("overview.revenueTitle")}
+            description={t("overview.revenueDescription")}
+            actions={
+              <div role="tablist" aria-label={t("overview.revenueTitle")} className="inline-flex items-center rounded-lg border bg-muted/60 p-0.5 text-xs">
+                {(
+                  [
+                    ["bar", t("overview.chartBar")],
+                    ["line", t("overview.chartLine")],
+                  ] as const
+                ).map(([modeKey, label]) => {
+                  const active = chartMode === modeKey
+                  return (
+                    <button
+                      key={modeKey}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => setChartMode(modeKey)}
+                      className={cn(
+                        "rounded-md px-3 py-1 font-medium transition-all",
+                        active ? "bg-background text-foreground shadow-xs font-semibold" : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+            }
+          >
             {d.revenueSeries.every((p) => p.amount === 0) ? (
               <p className="py-10 text-center text-sm text-muted-foreground">{t("overview.noRevenue")}</p>
             ) : (
               <BarSeries
                 caption={t("overview.revenueTitle")}
-                data={d.revenueSeries.map((p) => ({ key: p.date, label: shortDate(p.date + "T12:00:00+07:00"), value: p.amount }))}
+                mode={chartMode}
+                data={d.revenueSeries.map((p) => ({
+                  key: p.date,
+                  label: shortDate(p.date + "T12:00:00+07:00"),
+                  axisLabel: `${p.date.slice(8, 10)}/${p.date.slice(5, 7)}`,
+                  value: p.amount,
+                }))}
                 format={money}
-                height={180}
+                height={190}
               />
             )}
           </Section>

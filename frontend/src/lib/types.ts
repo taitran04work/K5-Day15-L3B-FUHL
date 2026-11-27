@@ -220,6 +220,11 @@ export interface PublicTenant {
   depositPercent: number
   holdMinutes: number
   botEnabled: boolean
+  /** home page slide backgrounds (the hero uses coverImageUrl); null = auto from room photos */
+  bgAboutUrl: string | null
+  bgRoomsUrl: string | null
+  bgPoliciesUrl: string | null
+  bgContactUrl: string | null
 }
 
 export interface Faq {
@@ -277,6 +282,15 @@ export interface TenantSettings {
   zaloOaId: string | null
   momoCustom: boolean
   momoPartnerCode: string | null
+  /** the homestay's own Anthropic key is stored (never returned; only its last 4 chars) */
+  aiKeyConfigured: boolean
+  aiKeyHint: string | null
+  aiModel: string | null
+  /** home page slide backgrounds (the hero uses coverImageUrl); null = auto from room photos */
+  bgAboutUrl: string | null
+  bgRoomsUrl: string | null
+  bgPoliciesUrl: string | null
+  bgContactUrl: string | null
 }
 
 export interface PriceRule {

@@ -186,14 +186,15 @@ function describeAdj(t: TFunction, r: PriceRule) {
 }
 
 function PricePreview({ rooms }: { rooms: Room[] }) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const nightly = rooms.filter((r) => r.supportsNightly)
   const [roomId, setRoomId] = useState<string>("")
+  const [days, setDays] = useState<7 | 14>(14)
   const id = roomId || nightly[0]?.id
   const cal = useQuery({
-    queryKey: ["price-calendar", id],
+    queryKey: ["price-calendar", id, days],
     enabled: !!id,
-    queryFn: () => api.get<{ date: string; price: number; rule: string | null }[]>(`/api/app/pricing/calendar?roomId=${id}&days=60`),
+    queryFn: () => api.get<{ date: string; price: number; rule: string | null }[]>(`/api/app/pricing/calendar?roomId=${id}&days=${days}`),
   })
   const room = nightly.find((r) => r.id === id)
   const weeks = useMemo(() => {
@@ -206,61 +207,94 @@ function PricePreview({ rooms }: { rooms: Room[] }) {
     for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7))
     return rows
   }, [cal.data])
-  const locale = i18n.language.startsWith("vi") ? "vi-VN" : "en-GB"
-  const compact = (n: number) => new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 2 }).format(n)
 
   if (!nightly.length) return null
   return (
     <Section
       title={t("pricing.previewTitle")}
-      description={t("pricing.previewDescription")}
+      description={t("pricing.previewDescription", { days })}
       actions={
-        <Select value={id} onValueChange={setRoomId}>
-          <SelectTrigger className="w-48" size="sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {nightly.map((r) => (
-              <SelectItem key={r.id} value={r.id}>
-                {r.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex flex-wrap items-center gap-2">
+          <div role="tablist" aria-label={t("pricing.previewTitle")} className="inline-flex items-center rounded-lg border bg-muted/60 p-0.5 text-xs">
+            {([7, 14] as const).map((d) => {
+              const active = days === d
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setDays(d)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 font-medium transition-all",
+                    active ? "bg-background font-semibold text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {d === 7 ? t("pricing.oneWeek") : t("pricing.twoWeeks")}
+                </button>
+              )
+            })}
+          </div>
+          <Select value={id} onValueChange={setRoomId}>
+            <SelectTrigger className="w-48" size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {nightly.map((r) => (
+                <SelectItem key={r.id} value={r.id}>
+                  {r.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       }
     >
       {cal.isLoading ? (
-        <Skeleton className="h-64 w-full" />
+        <Skeleton className="h-44 w-full rounded-lg" />
       ) : (
         <>
-          <div className="grid grid-cols-7 gap-1 text-center text-[11px] text-muted-foreground">
+          <div className="grid grid-cols-7 gap-2 text-center text-xs font-medium text-muted-foreground">
             {DAYS.map((d) => (
               <span key={d} className="py-1">
                 {t(`days.short.${d}`)}
               </span>
             ))}
           </div>
-          <div className="mt-1 space-y-1">
+          <div className="mt-1.5 space-y-2">
             {weeks.map((w, i) => (
-              <div key={i} className="grid grid-cols-7 gap-1">
-                {w.map((c, j) =>
-                  c ? (
+              <div key={i} className="grid grid-cols-7 gap-2">
+                {w.map((c, j) => {
+                  if (!c) return <div key={j} className="rounded-lg border border-dashed border-border/50 bg-muted/20" />
+                  const dt = parseISO(c.date)
+                  const changed = !!c.rule && c.price !== room?.baseNightlyPrice
+                  return (
                     <div
-                      key={j}
+                      key={c.date}
                       title={`${fmtDate(c.date + "T12:00:00+07:00")} · ${money(c.price)}${c.rule ? ` · ${c.rule}` : ""}`}
-                      className={cn("rounded-md border px-1.5 py-1.5 text-left", c.rule && c.price !== room?.baseNightlyPrice && "border-brand/30 bg-brand-soft")}
+                      className={cn(
+                        "flex min-h-[82px] flex-col justify-between rounded-lg border px-2.5 py-2 transition-colors",
+                        changed ? "border-brand/40 bg-brand-soft" : "bg-background/50",
+                      )}
                     >
-                      <p className="text-[11px] text-muted-foreground tabular">{parseISO(c.date).getDate()}</p>
-                      <p className={cn("text-xs font-medium tabular", c.rule && c.price !== room?.baseNightlyPrice && "text-brand")}>{compact(c.price)}</p>
+                      <span className="text-xs font-medium text-muted-foreground tabular">
+                        {String(dt.getDate()).padStart(2, "0")}/{String(dt.getMonth() + 1).padStart(2, "0")}
+                      </span>
+                      <div className="mt-2">
+                        <p className={cn("text-sm font-semibold tabular leading-tight", changed ? "text-brand" : "text-foreground")}>
+                          {money(c.price)}
+                        </p>
+                        <p className={cn("mt-0.5 truncate text-[11px]", changed ? "text-brand/85" : "text-subtle")}>
+                          {changed ? c.rule : t("pricing.basePriceTag")}
+                        </p>
+                      </div>
                     </div>
-                  ) : (
-                    <div key={j} />
-                  ),
-                )}
+                  )
+                })}
               </div>
             ))}
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">{t("pricing.previewLegend", { price: money(room?.baseNightlyPrice ?? 0) })}</p>
+          <p className="mt-4 text-xs text-muted-foreground">{t("pricing.previewLegend", { price: money(room?.baseNightlyPrice ?? 0) })}</p>
         </>
       )}
     </Section>
@@ -294,16 +328,25 @@ export default function Pricing() {
           </Button>
         }
       />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_480px]">
-        <div>
+      <div className="space-y-6">
+        <Section title={t("pricing.rulesTitle")} description={t("pricing.orderHint")}>
           {rules.isLoading ? (
-            <RowsSkeleton rows={4} />
+            <RowsSkeleton rows={3} />
           ) : rules.error ? (
             <ErrorState error={rules.error} onRetry={() => void rules.refetch()} />
           ) : !rules.data?.length ? (
-            <EmptyState icon={<Tag />} title={t("pricing.emptyTitle")} description={t("pricing.emptyDescription")} action={<Button onClick={() => setOpen(true)}><Plus /> {t("pricing.addRule")}</Button>} />
+            <EmptyState
+              icon={<Tag />}
+              title={t("pricing.emptyTitle")}
+              description={t("pricing.emptyDescription")}
+              action={
+                <Button onClick={() => setOpen(true)}>
+                  <Plus /> {t("pricing.addRule")}
+                </Button>
+              }
+            />
           ) : (
-            <div className="responsive-table-frame rounded-xl border">
+            <div className="responsive-table-frame -mx-1 rounded-lg border">
               <table className="responsive-table w-full text-sm" role="table">
                 <thead>
                   <tr className="border-b text-left text-xs text-muted-foreground">
@@ -318,7 +361,7 @@ export default function Pricing() {
                 </thead>
                 <tbody className="divide-y">
                   {rules.data.map((r) => (
-                    <tr key={r.id} className="cursor-pointer hover:bg-muted/50" onClick={() => { setEditing(r); setOpen(true) }}>
+                    <tr key={r.id} className="cursor-pointer transition-colors hover:bg-muted/50" onClick={() => { setEditing(r); setOpen(true) }}>
                       <td data-row-title className="px-4 py-3">
                         <p className={cn("font-medium", !r.isActive && "text-muted-foreground")}>{r.name}</p>
                         <p className="text-xs text-muted-foreground">{roomName(r.roomId)}</p>
@@ -329,9 +372,14 @@ export default function Pricing() {
                         {r.startTime && ` · ${r.startTime.slice(0, 5)}–${r.endTime?.slice(0, 5)}`}
                         {r.daysOfWeek.length > 0 && r.type !== "Holiday" && ` · ${r.daysOfWeek.map((d) => t(`days.short.${d}`)).join(", ")}`}
                       </td>
-                      <td data-label={t("pricing.col.change")} className="px-4 py-3 text-right font-medium tabular">{describeAdj(t, r)}</td>
+                      <td
+                        data-label={t("pricing.col.change")}
+                        className={cn("px-4 py-3 text-right font-medium tabular", r.isActive ? "text-brand" : "text-muted-foreground")}
+                      >
+                        {describeAdj(t, r)}
+                      </td>
                       <td data-label={t("pricing.col.priority")} className="px-4 py-3 text-right text-muted-foreground tabular">{r.priority}</td>
-                      <td data-label={t("pricing.col.active")} className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <td data-label={t("pricing.col.active")} className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                         <Switch checked={r.isActive} onCheckedChange={() => toggle.mutate(r)} aria-label={t("pricing.col.active")} />
                       </td>
                     </tr>
@@ -340,8 +388,7 @@ export default function Pricing() {
               </table>
             </div>
           )}
-          <p className="mt-3 text-xs text-muted-foreground">{t("pricing.orderHint")}</p>
-        </div>
+        </Section>
         <PricePreview rooms={rooms.data ?? []} />
       </div>
       <RuleDialog rule={editing} open={open} onOpenChange={setOpen} rooms={rooms.data ?? []} />
