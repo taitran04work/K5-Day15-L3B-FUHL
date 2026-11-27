@@ -488,6 +488,17 @@ public class DeplaoChannelsController(
             t.DeplaoWebhookSecretEnc = secrets.Protect(secret);
         }
         var reg = await deplaoClient.RegisterOrUpdateWebhookAsync(t, WebhookUrlFor(t), secret, HttpContext.RequestAborted);
+        if (!reg.Ok && (reg.Message?.StartsWith("Deplao HTTP 401:") == true || reg.Message?.StartsWith("Deplao HTTP 403:") == true))
+        {
+            t.DeplaoApiKeyEnc = null;
+            t.DeplaoWebhookId = null;
+            await Db.SaveChangesAsync();
+            if (await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted))
+            {
+                secret = deplaoClient.ResolveWebhookSecret(t) ?? secret;
+                reg = await deplaoClient.RegisterOrUpdateWebhookAsync(t, WebhookUrlFor(t), secret, HttpContext.RequestAborted);
+            }
+        }
         if (reg.Ok && !string.IsNullOrEmpty(reg.WebhookId))
             t.DeplaoWebhookId = reg.WebhookId;
         await Db.SaveChangesAsync();
