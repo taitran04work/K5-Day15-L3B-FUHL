@@ -1,7 +1,0 @@
-0000000000000000000000000000000000000000 f0ab3fc0fda34f80543b6dadb97e5e26d7b99465 taitran <taithhe186754@fpt.edu.vn> 1795759434 +0700	commit (initial): P1-P3 backend: tenancy, auth, rooms, pricing, availability, holds, MoMo, seed
-f0ab3fc0fda34f80543b6dadb97e5e26d7b99465 08364fc40571ef423327699e7d980f2a3644805d taitran <taithhe186754@fpt.edu.vn> 1795761004 +0700	commit: P4-P6 backend: policy pipeline, Claude concierge, Zalo, overview, tests
-08364fc40571ef423327699e7d980f2a3644805d d52ac87cb0cab0f8b45f452488fb5d27c77a389a taitran <taithhe186754@fpt.edu.vn> 1795761884 +0700	commit: Frontend: public booking site, chat widget, owner app, admin, i18n (en/vi)
-d52ac87cb0cab0f8b45f452488fb5d27c77a389a d89c715534c320ac829bfa35a9bccc23fe971d79 taitran <taithhe186754@fpt.edu.vn> 1795762387 +0700	commit: Document the Stayra demo and container setup
-d89c715534c320ac829bfa35a9bccc23fe971d79 a888ca4009ca73bc5a4b09a473a77f66f2e6d2fe taitran <taithhe186754@fpt.edu.vn> 1795763408 +0700	commit: Review English and Vietnamese layouts across desktop and mobile
-a888ca4009ca73bc5a4b09a473a77f66f2e6d2fe 63699e7a3bfb5d3a3ae31c7f472595c96045ce8e taitran <taithhe186754@fpt.edu.vn> 1795763598 +0700	commit: Localize guest booking notices and refund explanations
-63699e7a3bfb5d3a3ae31c7f472595c96045ce8e b839d886633f22f7b962f947acca52d39316028c taitran <taithhe186754@fpt.edu.vn> 1795763798 +0700	commit: Keep booking details visible on mobile
