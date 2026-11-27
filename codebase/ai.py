@@ -9,19 +9,16 @@ Hợp đồng (giữ nguyên để khung đo được token):
     @model_call (từ tracing.py) tự ghi mỗi lần gọi vào trace; agent.py gọi call_model bao nhiêu lần
     cũng được, khung tự cộng token.
     Lỗi gọi model (hết lượt, sai key, mất mạng): cứ để exception bay ra — khung ghi lỗi vào cột error.
-
-Chế độ giả (mặc định khi .env chưa có MODEL_PROVIDER, hoặc MODEL_PROVIDER=fake):
-    trả một câu giả cố định, model "fake", token 0 — để luồng chạy hết từ trước CP2 (guide bước 3.2).
-    Lượt `run.py eval` / `run.py simulate` chạy bằng model giả KHÔNG được tính.
-
-Nối model thật: điền .env (chép từ .env.example), rồi viết nhánh gọi API ở dưới theo docs/connect-model.md
-(có ví dụ OpenAI, Claude, model chạy trên máy, và cách nối nhà cung cấp khác). Không dán API key vào file này.
 """
+import json
 import os
+import urllib.error
+import urllib.request
 
 from tracing import model_call
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SHOW_RAW = False
 
 
 def load_env(path=os.path.join(ROOT, ".env")):
@@ -37,10 +34,80 @@ def load_env(path=os.path.join(ROOT, ".env")):
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def _clean_env(name: str, default: str = "") -> str:
+    raw = os.environ.get(name) or default
+    return raw.split("#", 1)[0].strip().strip('"').strip("'")
+
+
 load_env()
-MODEL_PROVIDER = (os.environ.get("MODEL_PROVIDER") or "fake").strip().lower()
-MODEL_NAME = (os.environ.get("MODEL_NAME") or "").strip()
-API_KEY = (os.environ.get("API_KEY") or "").strip()
+MODEL_PROVIDER = _clean_env("MODEL_PROVIDER", "fake").lower() or "fake"
+MODEL_NAME = _clean_env("MODEL_NAME") or _clean_env("ANTHROPIC_MODEL")
+API_KEY = _clean_env("API_KEY") or _clean_env("ANTHROPIC_API_KEY")
+
+
+def _post_json(url: str, headers: dict, body: dict, timeout: int = 60) -> dict:
+    """Gửi POST JSON, trả về dict phản hồi. Chỉ dùng thư viện chuẩn (urllib)."""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers=dict({"Content-Type": "application/json"}, **headers),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("HTTP %d: %s" % (e.code, e.read().decode("utf-8", "replace")[:300]))
+    if SHOW_RAW:
+        print(json.dumps(data, ensure_ascii=False, indent=2)[:3000])
+    return data
+
+
+def _call_claude(system: str, user: str) -> dict:
+    data = _post_json(
+        "https://api.anthropic.com/v1/messages",
+        {"x-api-key": API_KEY, "anthropic-version": "2023-06-01"},
+        {
+            "model": MODEL_NAME or "claude-haiku-5-5",
+            "max_tokens": 2048,
+            "system": system or "",
+            "messages": [{"role": "user", "content": user}],
+        },
+    )
+    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+    u = data["usage"]
+    tokens_in = int(u.get("input_tokens", 0)) + int(u.get("cache_read_input_tokens", 0)) + int(u.get("cache_creation_input_tokens", 0))
+    return {"text": text, "tokens_in": tokens_in, "tokens_out": int(u.get("output_tokens", 0))}
+
+
+def _call_openai(system: str, user: str) -> dict:
+    messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": user}]
+    data = _post_json(
+        "https://api.openai.com/v1/chat/completions",
+        {"Authorization": "Bearer " + API_KEY},
+        {"model": MODEL_NAME, "messages": messages},
+    )
+    u = data["usage"]
+    return {
+        "text": data["choices"][0]["message"]["content"] or "",
+        "tokens_in": int(u["prompt_tokens"]),
+        "tokens_out": int(u["completion_tokens"]),
+    }
+
+
+def _call_ollama(system: str, user: str) -> dict:
+    messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": user}]
+    data = _post_json(
+        "http://localhost:11434/api/chat",
+        {},
+        {"model": MODEL_NAME, "messages": messages, "stream": False},
+        timeout=300,
+    )
+    return {
+        "text": data["message"]["content"],
+        "tokens_in": int(data.get("prompt_eval_count", 0)),
+        "tokens_out": int(data.get("eval_count", 0)),
+    }
 
 
 @model_call
@@ -49,8 +116,20 @@ def call_model(system: str, user: str) -> dict:
         last = (user.strip().splitlines() or [""])[-1]
         return {"text": "[câu trả lời giả — chưa nối model] " + last[:60], "model": "fake", "tokens_in": 0, "tokens_out": 0}
 
-    # NHÓM VIẾT: gọi model thật ở đây (theo MODEL_PROVIDER, MODEL_NAME, API_KEY) rồi trả đúng 4 khoá.
-    # Ví dụ chép được cho từng nhà cung cấp: docs/connect-model.md mục 2.
-    raise NotImplementedError(
-        "chưa viết phần gọi model thật cho MODEL_PROVIDER=%s trong codebase/ai.py — xem docs/connect-model.md"
-        % MODEL_PROVIDER)
+    if MODEL_PROVIDER == "anthropic":
+        r = _call_claude(system, user)
+    elif MODEL_PROVIDER == "openai":
+        r = _call_openai(system, user)
+    elif MODEL_PROVIDER == "ollama":
+        r = _call_ollama(system, user)
+    else:
+        raise NotImplementedError(
+            "chưa hỗ trợ MODEL_PROVIDER=%s trong codebase/ai.py — xem docs/connect-model.md" % MODEL_PROVIDER
+        )
+
+    return {
+        "text": r["text"],
+        "model": MODEL_NAME or "claude-haiku-5-5",
+        "tokens_in": int(r["tokens_in"]),
+        "tokens_out": int(r["tokens_out"]),
+    }

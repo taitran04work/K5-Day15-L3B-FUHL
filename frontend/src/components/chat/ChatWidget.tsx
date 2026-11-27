@@ -83,6 +83,7 @@ export function ChatWidget({ slug, tenant }: { slug: string; tenant: PublicTenan
     }
   })
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [convStatus, setConvStatus] = useState<"Bot" | "HumanTakeover" | "Closed">("Bot")
   const [text, setText] = useState("")
   const [sending, setSending] = useState(false)
   const [typing, setTyping] = useState(false)
@@ -90,19 +91,25 @@ export function ChatWidget({ slug, tenant }: { slug: string; tenant: PublicTenan
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const startedRef = useRef(false)
+  const syncedLangRef = useRef<string | null>(null)
 
   const start = useCallback(async () => {
     try {
-      const res = await api.post<{ conversationId: string; visitorToken: string; messages: ChatMessage[] }>(`/api/public/${slug}/chat/conversations`, {
-        language: i18n.language.startsWith("vi") ? "vi" : "en",
+      const lang = i18n.language.startsWith("vi") ? "vi" : "en"
+      const res = await api.post<{ conversationId: string; visitorToken: string; status?: "Bot" | "HumanTakeover" | "Closed"; messages: ChatMessage[] }>(`/api/public/${slug}/chat/conversations`, {
+        language: lang,
         visitorToken: session?.visitorToken ?? null,
       })
       const s = { conversationId: res.conversationId, visitorToken: res.visitorToken }
       localStorage.setItem(storageKey, JSON.stringify(s))
+      syncedLangRef.current = lang
       setSession(s)
+      if (res.status) setConvStatus(res.status)
       setMessages((prev) => mergeMessages(prev, res.messages.filter((m) => m.role !== "Tool")))
       setError(null)
     } catch {
+      localStorage.removeItem(storageKey)
+      setSession(null)
       setError(t("chat.connectError"))
     }
   }, [slug, session?.visitorToken, i18n.language, storageKey, t])
@@ -114,9 +121,18 @@ export function ChatWidget({ slug, tenant }: { slug: string; tenant: PublicTenan
     }
   }, [open, start])
 
+  useEffect(() => {
+    if (!session) return
+    const lang = i18n.language.startsWith("vi") ? "vi" : "en"
+    if (syncedLangRef.current === lang) return
+    syncedLangRef.current = lang
+    void api.post(`/api/public/${slug}/chat/conversations/${session.conversationId}/language`, { token: session.visitorToken, language: lang }).catch(() => undefined)
+  }, [i18n.language, session, slug])
+
   useWidgetHub(session?.conversationId ?? null, session?.visitorToken ?? null, {
     messageAdded: (m: ChatMessage) => {
       if (m.role === "Tool") return
+      if (m.role === "Owner") setConvStatus("HumanTakeover")
       setMessages((prev) => mergeMessages(prev, [m]))
       if (m.role !== "Guest") setTyping(false)
     },
@@ -145,7 +161,8 @@ export function ChatWidget({ slug, tenant }: { slug: string; tenant: PublicTenan
     const optimistic: ChatMessage = { id: `local-${Date.now()}`, conversationId: session.conversationId, role: "Guest", content, cards: null, authorName: null, toolName: null, createdAt: new Date().toISOString() }
     setMessages((prev) => [...prev, optimistic])
     try {
-      const res = await api.post<{ messages: ChatMessage[] }>(`/api/public/${slug}/chat/conversations/${session.conversationId}/messages`, { token: session.visitorToken, text: content })
+      const res = await api.post<{ status?: "Bot" | "HumanTakeover" | "Closed"; messages: ChatMessage[] }>(`/api/public/${slug}/chat/conversations/${session.conversationId}/messages`, { token: session.visitorToken, text: content })
+      if (res.status) setConvStatus(res.status)
       setMessages((prev) => mergeMessages(prev.filter((m) => m.id !== optimistic.id), res.messages.filter((m) => m.role !== "Tool")))
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== optimistic.id))
@@ -190,7 +207,7 @@ export function ChatWidget({ slug, tenant }: { slug: string; tenant: PublicTenan
             <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-brand text-sm font-semibold text-brand-foreground">{tenant.name[0]}</span>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold [overflow-wrap:anywhere]">{tenant.name}</p>
-              <p className="text-xs text-muted-foreground">{t("chat.subtitle")}</p>
+              <p className="text-xs text-muted-foreground">{convStatus === "HumanTakeover" ? t("chat.hostJoined") : t("chat.subtitle")}</p>
             </div>
             <LanguageSwitch compact className="shrink-0" />
             <Button variant="ghost" size="icon-sm" onClick={() => setOpen(false)} aria-label={t("chat.close")}>

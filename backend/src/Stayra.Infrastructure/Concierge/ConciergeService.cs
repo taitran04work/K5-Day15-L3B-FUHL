@@ -108,7 +108,7 @@ public partial class ConciergeService(
     private async Task<(string Reply, int InputTokens, int OutputTokens)> RunClaudeAsync(ToolContext ctx, CancellationToken ct)
     {
         var client = new AnthropicClient { ApiKey = config["Anthropic:ApiKey"]! };
-        var model = config["Anthropic:Model"] ?? "claude-sonnet-5-5";
+        var model = config["Anthropic:Model"] ?? "claude-haiku-5-5";
         var maxIterations = Math.Clamp(config.GetValue("Anthropic:MaxIterations", 6), 1, 10);
         var system = BuildSystemPrompt(ctx.Tenant, ctx.Conversation);
         var toolUnions = ConciergeTools.Definitions.Select(d => (ToolUnion)new Tool

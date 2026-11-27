@@ -82,7 +82,7 @@ Everything is configured through environment variables — see [.env.example](.e
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Claude concierge and policy extraction (default model `claude-sonnet-5-5`) |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Claude concierge and policy extraction (default model `claude-haiku-5-5`) |
 | `VOYAGE_API_KEY` | `voyage-3` embeddings for policy search |
 | `MOMO_PARTNER_CODE`, `MOMO_ACCESS_KEY`, `MOMO_SECRET_KEY` | Platform MoMo credentials (sandbox by default) |
 | `PUBLIC_API_URL` | Public base URL for MoMo IPN and Zalo webhooks (use ngrok: `docker compose --profile tunnel up`) |

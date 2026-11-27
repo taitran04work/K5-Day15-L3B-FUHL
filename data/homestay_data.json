@@ -1,0 +1,259 @@
+{
+  "property": {
+    "name": "Pine Hill Homestay",
+    "slug": "pine-hill",
+    "address": "12 Đường Hoa Hồng, Phường 4, Đà Lạt, Lâm Đồng",
+    "phone": "0912345678",
+    "check_in_time": "14:00",
+    "check_out_time": "12:00",
+    "opening_time": "07:00",
+    "closing_time": "23:00",
+    "deposit_percent": 30,
+    "hold_minutes": 15,
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "rooms": [
+    {
+      "code": "PH-LOFT",
+      "name": "Pine Loft",
+      "description": "Phòng gác mái gỗ có giường queen, góc đọc sách và ban công nhỏ nhìn ra rừng thông.",
+      "max_guests": 2,
+      "base_guests": 2,
+      "beds": "1 giường queen",
+      "area_m2": 28,
+      "amenities": ["wifi", "máy sưởi", "ban công", "view núi", "nước nóng", "cà phê"],
+      "supports_nightly": true,
+      "base_nightly_price": 850000,
+      "supports_hourly": true,
+      "base_hourly_price": 150000,
+      "min_hours": 2,
+      "extra_guest_fee": 0
+    },
+    {
+      "code": "PH-GDN",
+      "name": "Garden Double",
+      "description": "Phòng đôi tầng trệt mở thẳng ra vườn hoa, thuận tiện đi lại.",
+      "max_guests": 2,
+      "base_guests": 2,
+      "beds": "1 giường đôi",
+      "area_m2": 22,
+      "amenities": ["wifi", "máy sưởi", "view vườn", "nước nóng"],
+      "supports_nightly": true,
+      "base_nightly_price": 650000,
+      "supports_hourly": true,
+      "base_hourly_price": 120000,
+      "min_hours": 2,
+      "extra_guest_fee": 0
+    },
+    {
+      "code": "PH-FAM",
+      "name": "Family Suite",
+      "description": "Hai giường queen, góc sofa và cửa sổ lớn nhìn ra thung lũng, phù hợp gia đình hoặc nhóm bạn.",
+      "max_guests": 5,
+      "base_guests": 4,
+      "beds": "2 giường queen",
+      "area_m2": 42,
+      "amenities": ["wifi", "máy sưởi", "view thung lũng", "bồn tắm", "nước nóng", "ấm đun nước"],
+      "supports_nightly": true,
+      "base_nightly_price": 1450000,
+      "supports_hourly": false,
+      "base_hourly_price": 0,
+      "min_hours": 0,
+      "extra_guest_fee": 150000
+    },
+    {
+      "code": "PH-ATT",
+      "name": "Attic Twin",
+      "description": "Phòng 2 giường đơn ấm cúng trên áp mái có giếng trời, tiết kiệm cho bạn bè đi chung.",
+      "max_guests": 2,
+      "base_guests": 2,
+      "beds": "2 giường đơn",
+      "area_m2": 20,
+      "amenities": ["wifi", "máy sưởi", "nước nóng"],
+      "supports_nightly": true,
+      "base_nightly_price": 550000,
+      "supports_hourly": true,
+      "base_hourly_price": 100000,
+      "min_hours": 2,
+      "extra_guest_fee": 0
+    },
+    {
+      "code": "PH-VAL",
+      "name": "Valley View King",
+      "description": "Phòng được đặt nhiều nhất: giường king, cửa kính kịch trần đón bình minh trên thung lũng.",
+      "max_guests": 2,
+      "base_guests": 2,
+      "beds": "1 giường king",
+      "area_m2": 30,
+      "amenities": ["wifi", "máy sưởi", "view thung lũng", "ban công", "bồn tắm", "cà phê"],
+      "supports_nightly": true,
+      "base_nightly_price": 1050000,
+      "supports_hourly": true,
+      "base_hourly_price": 180000,
+      "min_hours": 3,
+      "extra_guest_fee": 0
+    },
+    {
+      "code": "PH-CAB",
+      "name": "Cabin Studio",
+      "description": "Căn cabin tách biệt trong vườn có bếp nhỏ và daybed cho khách thứ 3.",
+      "max_guests": 3,
+      "base_guests": 2,
+      "beds": "1 giường queen + 1 daybed",
+      "area_m2": 26,
+      "amenities": ["wifi", "máy sưởi", "bếp nhỏ", "view vườn", "đỗ xe miễn phí"],
+      "supports_nightly": true,
+      "base_nightly_price": 900000,
+      "supports_hourly": false,
+      "base_hourly_price": 0,
+      "min_hours": 0,
+      "extra_guest_fee": 120000
+    }
+  ],
+  "price_rules": {
+    "weekend_percent": 20,
+    "weekend_days": ["Friday", "Saturday"],
+    "tet_2027_range": ["2027-02-04", "2027-02-10"],
+    "tet_2027_multiplier": 1.6,
+    "evening_hourly_range": ["18:00", "23:00"],
+    "evening_hourly_percent": 15
+  },
+  "refund_policy": {
+    "version": 1,
+    "notes": "Tiền hoàn được chuyển về ví MoMo gốc trong 3 đến 5 ngày làm việc.",
+    "no_show_refund_percent": 0,
+    "rules": [
+      {
+        "min_hours": 168,
+        "max_hours": null,
+        "refund_percent": 100,
+        "applies_to": "Deposit",
+        "label": "Hủy trước hơn 7 ngày (trên 168 giờ)",
+        "source": "CS-05 (trang 1)"
+      },
+      {
+        "min_hours": 72,
+        "max_hours": 168,
+        "refund_percent": 50,
+        "applies_to": "Deposit",
+        "label": "Hủy trước từ 3 đến 7 ngày (72–168 giờ)",
+        "source": "CS-05 (trang 1)"
+      },
+      {
+        "min_hours": 0,
+        "max_hours": 72,
+        "refund_percent": 0,
+        "applies_to": "Deposit",
+        "label": "Hủy dưới 72 giờ trước giờ nhận phòng",
+        "source": "CS-05 (trang 1)"
+      }
+    ]
+  },
+  "policy_sections": [
+    {
+      "code": "CS-01",
+      "title": "Nhận và trả phòng",
+      "text": "Nhận phòng từ 14:00, trả phòng trước 12:00. Nhận phòng sớm hoặc trả phòng muộn tùy tình trạng phòng trống, phụ thu 100.000 ₫/giờ. Lưu trú theo giờ phục vụ từ 07:00 đến 23:00 cho một số phòng (tối thiểu 2 giờ; Valley View King tối thiểu 3 giờ). Mọi khách người lớn cần xuất trình CCCD/hộ chiếu khi nhận phòng."
+    },
+    {
+      "code": "CS-02",
+      "title": "Nội quy chung",
+      "text": "Giờ yên tĩnh từ 22:00 đến 07:00. Không hút thuốc trong phòng và ngoài ban công (có khu hút thuốc ở sân vườn gần cổng). Không nhận thú cưng (trừ chó dẫn đường có giấy tờ). Khách không lưu trú vui lòng rời homestay trước 21:00. Đỗ xe máy miễn phí trong cổng; ô tô đỗ trên đường bên ngoài cổng."
+    },
+    {
+      "code": "CS-03",
+      "title": "Bữa sáng và tiện nghi",
+      "text": "Bữa sáng nhẹ gồm bánh mì, trứng, trái cây và cà phê Đà Lạt được phục vụ miễn phí từ 07:00 đến 09:30 cho khách đặt theo đêm. Wi-Fi miễn phí toàn khu. Các phòng đều có máy sưởi buổi tối và có thể mượn thêm chăn tại lễ tân."
+    },
+    {
+      "code": "CS-04",
+      "title": "Thanh toán và giữ chỗ",
+      "text": "Đặt cọc 30% tổng tiền phòng qua MoMo để xác nhận đặt phòng. Đơn chưa thanh toán cọc sẽ tự động giữ trong 15 phút trước khi nhả phòng. Phần còn lại thanh toán trước giờ nhận phòng 24 giờ qua link MoMo."
+    },
+    {
+      "code": "CS-05",
+      "title": "Chính sách hủy phòng",
+      "text": "Hủy trước hơn 7 ngày (168 giờ) trước giờ nhận phòng: hoàn 100% tiền cọc. Hủy trước từ 3 đến 7 ngày (72–168 giờ): hoàn 50% tiền cọc. Hủy dưới 72 giờ hoặc không đến (no-show): không hoàn tiền. Tiền hoàn về ví MoMo trong 3–5 ngày làm việc."
+    },
+    {
+      "code": "CS-06",
+      "title": "Đổi ngày / đổi phòng",
+      "text": "Khách được đổi ngày hoặc đổi phòng miễn phí nếu phòng còn trống. Nếu giá mới cao hơn, phần chênh lệch cộng vào số tiền còn lại; nếu thấp hơn, phần trả dư sẽ được hoàn."
+    },
+    {
+      "code": "CS-07",
+      "title": "Bồi thường & đồ thất lạc",
+      "text": "Làm mất chìa khóa phòng phụ thu 200.000 ₫. Đồ bỏ quên được giữ tối đa 30 ngày, liên hệ Zalo hoặc điện thoại 0912 345 678."
+    }
+  ],
+  "faqs": [
+    {
+      "code": "FAQ-01",
+      "question": "Có bữa sáng không?",
+      "answer": "Có. Bữa sáng nhẹ kèm cà phê Đà Lạt phục vụ từ 07:00 đến 09:30 miễn phí cho khách đặt theo đêm."
+    },
+    {
+      "code": "FAQ-02",
+      "question": "Có chỗ đậu xe ô tô và xe máy không?",
+      "answer": "Xe máy đỗ miễn phí trong cổng; ô tô đỗ ở đường bên ngoài cổng."
+    },
+    {
+      "code": "FAQ-03",
+      "question": "Cách trung tâm / Hồ Xuân Hương bao xa?",
+      "answer": "Khoảng 10 phút đi xe hoặc 25 phút đi bộ tới Hồ Xuân Hương và chợ đêm Đà Lạt."
+    },
+    {
+      "code": "FAQ-04",
+      "question": "Có nhận phòng sớm được không?",
+      "answer": "Tùy tình trạng phòng trống trong ngày, phí nhận phòng sớm là 100.000 ₫/giờ."
+    }
+  ],
+  "bookings": [
+    {
+      "code": "STR-7K3Q9P",
+      "room_code": "PH-VAL",
+      "room_name": "Valley View King",
+      "mode": "nightly",
+      "start": "2026-11-28",
+      "end": "2026-11-30",
+      "guests": 2,
+      "guest_name": "Nguyễn Minh Anh",
+      "guest_phone": "0912345678",
+      "status": "Confirmed",
+      "total": 2310000,
+      "deposit": 693000,
+      "paid": 693000
+    },
+    {
+      "code": "STR-8M4P2X",
+      "room_code": "PH-FAM",
+      "room_name": "Family Suite",
+      "mode": "nightly",
+      "start": "2026-12-05",
+      "end": "2026-12-07",
+      "guests": 4,
+      "guest_name": "Trần Quốc Bảo",
+      "guest_phone": "0987654321",
+      "status": "Confirmed",
+      "total": 3190000,
+      "deposit": 957000,
+      "paid": 957000
+    },
+    {
+      "code": "STR-9P5R3T",
+      "room_code": "PH-LOFT",
+      "room_name": "Pine Loft",
+      "mode": "nightly",
+      "start": "2026-12-12",
+      "end": "2026-12-14",
+      "guests": 2,
+      "guest_name": "Lê Thu Hà",
+      "guest_phone": "0903456789",
+      "status": "PendingDeposit",
+      "total": 1870000,
+      "deposit": 561000,
+      "paid": 0
+    }
+  ]
+}
+

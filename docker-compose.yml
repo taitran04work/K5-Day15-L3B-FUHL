@@ -44,7 +44,7 @@ services:
       Momo__ReturnBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
       Momo__Offline: ${MOMO_OFFLINE:-false}
       Anthropic__ApiKey: ${ANTHROPIC_API_KEY:-}
-      Anthropic__Model: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      Anthropic__Model: ${ANTHROPIC_MODEL:-claude-haiku-5-5}
       Embeddings__VoyageApiKey: ${VOYAGE_API_KEY:-}
       Zalo__WebBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
     ports:

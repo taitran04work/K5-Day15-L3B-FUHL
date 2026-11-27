@@ -416,7 +416,7 @@ const vi = {
     backHome: "Về trang chủ",
   },
   chat: {
-    open: "Chat với chúng tôi", close: "Đóng chat", title: "Chat với {{name}}", subtitle: "Trả lời ngay, cả ngày lẫn đêm", typing: "Đang nhập",
+    open: "Chat với chúng tôi", close: "Đóng chat", title: "Chat với {{name}}", subtitle: "Trả lời ngay, cả ngày lẫn đêm", hostJoined: "Chủ nhà đang trực tiếp hỗ trợ", typing: "Đang nhập",
     welcome: "Xin chào, chào mừng bạn đến {{name}}. Mình có thể kiểm tra phòng trống, đặt phòng hoặc giải đáp thắc mắc về kỳ nghỉ của bạn.",
     placeholder: "Nhập tin nhắn…", send: "Gửi", disclaimer: "Trợ lý tự động. Chủ nhà có thể tham gia bất cứ lúc nào.", connectError: "Không thể bắt đầu cuộc trò chuyện.",
     sendError: "Tin nhắn chưa gửi được. Vui lòng thử lại.", tooLong: "Tin nhắn tối đa 2.000 ký tự.",
