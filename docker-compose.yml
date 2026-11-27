@@ -84,6 +84,7 @@ services:
       DEPLAO_CHANNELS_ONLY: 1
       DEPLAO_WEB_PASSWORD: ${DEPLAO_WEB_PASSWORD:-stayra-deplao-local-1234}
       DEPLAO_WEB_PORT: 27800
+      DEPLAO_WEB_HOST: 0.0.0.0
       DEPLAO_WEB_SECURE: 0
     ports:
       - "27800:27800"

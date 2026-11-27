@@ -205,7 +205,8 @@ export async function startBrowserServer(options: BrowserServerOptions) {
   await readFile(path.join(options.assets, 'index.html')); // Fail startup if the browser bundle was not built.
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(options.port ?? 27800, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); });
+    const host = process.env.DEPLAO_WEB_HOST || '127.0.0.1';
+    server.listen(options.port ?? 27800, host, () => { server.removeListener('error', reject); resolve(); });
   });
   authority = `127.0.0.1:${(server.address() as import('net').AddressInfo).port}`;
   const heartbeat = setInterval(() => {
