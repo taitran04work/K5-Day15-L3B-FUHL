@@ -5,7 +5,7 @@ export type BookingSource = "Web" | "WebChat" | "Zalo" | "Owner"
 export type BookingStatus = "Hold" | "PendingDeposit" | "Confirmed" | "CheckedIn" | "CheckedOut" | "Cancelled" | "Expired" | "NoShow"
 export type PaymentKind = "Deposit" | "Remaining" | "Extra" | "Refund"
 export type PaymentStatus = "Created" | "Paid" | "Failed" | "Expired" | "Refunded"
-export type PaymentProvider = "MoMo" | "Cash" | "Manual"
+export type PaymentProvider = "VNPay" | "Cash" | "Manual"
 export type ChangeRequestType = "ChangeRoom" | "ChangeDates" | "Cancel"
 export type ChangeRequestStatus = "Pending" | "Approved" | "Rejected" | "Auto"
 export type PriceRuleType = "Weekend" | "DateRange" | "Holiday" | "HourWindow"
@@ -280,12 +280,19 @@ export interface TenantSettings {
   zaloConnected: boolean
   zaloAppId: string | null
   zaloOaId: string | null
-  momoCustom: boolean
-  momoPartnerCode: string | null
+  vnpayCustom: boolean
+  vnpayTmnCode: string | null
   /** the homestay's own Anthropic key is stored (never returned; only its last 4 chars) */
   aiKeyConfigured: boolean
   aiKeyHint: string | null
   aiModel: string | null
+  smtpCustom: boolean
+  smtpHost: string | null
+  smtpPort: number | null
+  smtpUsername: string | null
+  smtpFromEmail: string | null
+  smtpFromName: string | null
+  smtpEnableSsl: boolean
   /** home page slide backgrounds (the hero uses coverImageUrl); null = auto from room photos */
   bgAboutUrl: string | null
   bgRoomsUrl: string | null

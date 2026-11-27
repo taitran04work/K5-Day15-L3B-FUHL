@@ -20,14 +20,15 @@ interface ReturnResult {
   tenantSlug: string | null
   amount: number
   kind: string | null
-  resultCode: string | null
+  responseCode: string | null
+  transactionStatus: string | null
   message: string | null
 }
 
-/** MoMo redirects the guest here with a signed query string; the API verifies it and records the payment. */
+/** VNPay redirects the guest here with a signed query string; the API verifies it and records the payment. */
 export default function PayReturn() {
   const { search } = useLocation()
-  const result = useQuery({ queryKey: ["pay-return", search], queryFn: () => api.get<ReturnResult>(`/api/payments/momo/return${search}`), retry: false })
+  const result = useQuery({ queryKey: ["pay-return", search], queryFn: () => api.get<ReturnResult>(`/api/payments/vnpay/return${search}`), retry: false })
   const home = usePublicHome(result.data?.tenantSlug ?? "")
   useBrand(home.data?.tenant.accentColor)
 
@@ -45,7 +46,7 @@ export default function PayReturn() {
 function PaymentResult({ r, loading, image }: { r?: ReturnResult; loading: boolean; image?: string | null }) {
   const { t } = useTranslation()
   const { money } = useLocalizedFormat()
-  const success = r && (r.status === "Paid" || r.resultCode === "0") && r.signatureValid
+  const success = r && (r.status === "Paid" || (r.responseCode === "00" && r.transactionStatus === "00")) && r.signatureValid
   return (
     <div className="guest-storefront relative isolate grid min-h-dvh place-items-center px-4 py-12">
       <GuestBackdrop image={image} />

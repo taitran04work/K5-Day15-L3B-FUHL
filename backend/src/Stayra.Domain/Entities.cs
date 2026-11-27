@@ -59,16 +59,24 @@ public class Tenant : Entity
     public string? ZaloRefreshTokenEnc { get; set; }
     public DateTimeOffset? ZaloTokenExpiresAt { get; set; }
 
-    // MoMo (per tenant, encrypted; falls back to platform sandbox)
-    public string? MomoPartnerCode { get; set; }
-    public string? MomoAccessKeyEnc { get; set; }
-    public string? MomoSecretKeyEnc { get; set; }
+    // VNPay (per tenant, encrypted; falls back to platform sandbox)
+    public string? VnpayTmnCode { get; set; }
+    public string? VnpayHashSecretEnc { get; set; }
 
     // AI concierge: the homestay brings its own Anthropic key (encrypted at rest) and picks a model
     public string? AnthropicApiKeyEnc { get; set; }
     /// <summary>Last 4 characters of the key, so the owner can recognise it without us ever returning it.</summary>
     public string? AnthropicKeyHint { get; set; }
     public string? AiModel { get; set; }
+
+    // Email notifications (per tenant, password encrypted at rest; falls back to platform SMTP)
+    public string? SmtpHost { get; set; }
+    public int? SmtpPort { get; set; }
+    public string? SmtpUsername { get; set; }
+    public string? SmtpPasswordEnc { get; set; }
+    public string? SmtpFromEmail { get; set; }
+    public string? SmtpFromName { get; set; }
+    public bool SmtpEnableSsl { get; set; } = true;
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
@@ -182,7 +190,7 @@ public class Payment : Entity, ITenantOwned
     public Booking? Booking { get; set; }
     public PaymentKind Kind { get; set; }
     public decimal Amount { get; set; }
-    public PaymentProvider Provider { get; set; } = PaymentProvider.MoMo;
+    public PaymentProvider Provider { get; set; } = PaymentProvider.VNPay;
     public string OrderId { get; set; } = "";
     public string RequestId { get; set; } = "";
     public string? PayUrl { get; set; }

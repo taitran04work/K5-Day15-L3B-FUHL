@@ -185,6 +185,8 @@ public class BookingService(
         }
         await db.SaveChangesAsync(ct);
         await realtime.BookingChanged(tenant.Id, booking.Id);
+        if (booking.Status == BookingStatus.Confirmed && email != null)
+            await email.SendBookingConfirmationAsync(tenant, booking, room, tenant.DefaultLanguage, ct);
         return booking;
     }
 
@@ -273,6 +275,11 @@ public class BookingService(
         if (to == BookingStatus.Confirmed)
             await SendConfirmationEmailAsync(tenant, booking, room, conversation?.Language ?? tenant.DefaultLanguage, ct);
         await realtime.BookingChanged(tenant.Id, booking.Id);
+        if (to == BookingStatus.Confirmed && email != null)
+        {
+            room ??= await db.Rooms.IgnoreQueryFilters().FirstOrDefaultAsync(r => r.Id == booking.RoomId, ct);
+            await email.SendBookingConfirmationAsync(tenant, booking, room, conversation?.Language ?? tenant.DefaultLanguage, ct);
+        }
     }
 
     private async Task SendConfirmationEmailAsync(Tenant tenant, Booking booking, Room? room, string language, CancellationToken ct)
@@ -423,10 +430,10 @@ public class BookingService(
         var name = booking.GuestName.Split(' ').Last();
         var text = (GuestText.IsVietnamese(language), isReminder) switch
         {
-            (true, true) => $"Đặt phòng {booking.Code} còn {amount} chưa thanh toán. Bạn có thể thanh toán qua MoMo bằng liên kết bên dưới.",
-            (true, false) => $"Chào {name}, số tiền còn phải thanh toán cho đặt phòng {booking.Code} là {amount}. Bạn có thể thanh toán qua MoMo bằng liên kết bên dưới.",
-            (false, true) => $"A friendly reminder: the remaining balance of {amount} for booking {booking.Code} is still open. You can pay securely with MoMo below.",
-            _ => $"Hi {name}, your remaining balance for booking {booking.Code} is {amount}. You can pay securely with MoMo below.",
+            (true, true) => $"Đặt phòng {booking.Code} còn {amount} chưa thanh toán. Bạn có thể thanh toán qua VNPay bằng liên kết bên dưới.",
+            (true, false) => $"Chào {name}, số tiền còn phải thanh toán cho đặt phòng {booking.Code} là {amount}. Bạn có thể thanh toán qua VNPay bằng liên kết bên dưới.",
+            (false, true) => $"A friendly reminder: the remaining balance of {amount} for booking {booking.Code} is still open. You can pay securely with VNPay below.",
+            _ => $"Hi {name}, your remaining balance for booking {booking.Code} is {amount}. You can pay securely with VNPay below.",
         };
         if (conversation != null) await messenger.SendAsync(conversation.Id, MessageRole.Bot, text, [Cards.PaymentCard(payment, booking.Code)], ct: ct);
         else log.LogInformation("[SMS stub] to {Phone}: {Text} {Url}", booking.GuestPhone, text, payment.PayUrl);

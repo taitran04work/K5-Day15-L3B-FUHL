@@ -33,8 +33,8 @@ public static class DependencyInjection
         services.Configure<StorageOptions>(config.GetSection("Storage"));
         services.AddSingleton<IFileStorage, LocalDiskStorage>();
 
-        services.Configure<MomoOptions>(config.GetSection("Momo"));
-        services.AddHttpClient<IPaymentGateway, MomoGateway>();
+        services.Configure<VnpayOptions>(config.GetSection("Vnpay"));
+        services.AddHttpClient<IPaymentGateway, VnpayGateway>();
         services.Configure<ZaloOptions>(config.GetSection("Zalo"));
         services.AddHttpClient<ZaloClient>();
         services.Configure<SmtpOptions>(o =>
@@ -56,7 +56,7 @@ public static class DependencyInjection
         services.AddScoped<BookingService>();
         services.AddScoped<ChangeService>();
         services.AddScoped<BookingJobs>();
-        services.AddScoped<MomoCallbackService>();
+        services.AddScoped<VnpayCallbackService>();
         services.AddScoped<PaymentJobs>();
 
         services.AddHangfire(h => h

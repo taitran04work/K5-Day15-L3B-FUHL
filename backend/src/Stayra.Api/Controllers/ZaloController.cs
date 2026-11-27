@@ -84,7 +84,7 @@ public record ZaloConnectRequest(string? AppId, string? AppSecret, string? OaId,
 public record ZaloTestRequest(string UserId, string? Text);
 
 [Route("api/app/channels/zalo")]
-public class ChannelsController(ISecretProtector secrets, ZaloClient zaloClient, IOptions<MomoOptions> momo, IConfiguration config) : OwnerControllerBase
+public class ChannelsController(ISecretProtector secrets, ZaloClient zaloClient, IOptions<VnpayOptions> vnpay, IConfiguration config) : OwnerControllerBase
 {
     [HttpGet]
     public async Task<object> Get() => View(await CurrentTenantAsync());
@@ -144,7 +144,7 @@ public class ChannelsController(ISecretProtector secrets, ZaloClient zaloClient,
 
     private object View(Tenant t)
     {
-        var apiBase = (config["App:PublicApiUrl"] ?? momo.Value.IpnBaseUrl).TrimEnd('/');
+        var apiBase = (config["App:PublicApiUrl"] ?? vnpay.Value.IpnBaseUrl).TrimEnd('/');
         return new
         {
             connected = !string.IsNullOrEmpty(t.ZaloAccessTokenEnc) && !string.IsNullOrEmpty(t.ZaloOaId),

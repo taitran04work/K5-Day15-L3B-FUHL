@@ -27,8 +27,8 @@ namespace Stayra.Tests;
 
 public class PostgresFixture : IAsyncLifetime
 {
-    public const string AccessKey = "F8BBA842ECF85";
-    public const string SecretKey = "K951B6PE1waDMi640xX08PD3vg6EkVlz";
+    public const string TmnCode = "DEMO2109";
+    public const string HashSecret = "SANDBOXHASHSECRET0123456789ABCDEF";
 
     private readonly PostgreSqlContainer _pg = new PostgreSqlBuilder("pgvector/pgvector:pg16")
         .WithDatabase("stayra_test").WithUsername("stayra").WithPassword("stayra")
@@ -52,10 +52,10 @@ public class PostgresFixture : IAsyncLifetime
         services.AddScoped<PaymentService>();
         services.AddScoped<BookingService>();
         services.AddScoped<ChangeService>();
-        services.AddScoped<MomoCallbackService>();
-        services.AddSingleton<IPaymentGateway>(sp => new MomoGateway(new HttpClient(),
-            Options.Create(new MomoOptions { PartnerCode = "MOMO", AccessKey = AccessKey, SecretKey = SecretKey, Offline = true }),
-            new PlainProtector(), NullLogger<MomoGateway>.Instance));
+        services.AddScoped<VnpayCallbackService>();
+        services.AddSingleton<IPaymentGateway>(sp => new VnpayGateway(new HttpClient(),
+            Options.Create(new VnpayOptions { TmnCode = TmnCode, HashSecret = HashSecret, Offline = true }),
+            new PlainProtector(), NullLogger<VnpayGateway>.Instance));
         services.AddSingleton<IBookingConflictDetector, PostgresConflictDetector>();
         services.AddScoped<IGuestMessenger, GuestMessenger>();
         services.AddSingleton<IRealtimeNotifier, NullRealtime>();
@@ -222,16 +222,22 @@ public class PaymentIdempotencyTests(PostgresFixture fx)
 
         var fields = new Dictionary<string, string>
         {
-            ["partnerCode"] = "MOMO", ["orderId"] = deposit.OrderId, ["requestId"] = deposit.RequestId, ["amount"] = ((long)deposit.Amount).ToString(),
-            ["orderInfo"] = "Deposit", ["orderType"] = "momo_wallet", ["transId"] = "4088878653", ["resultCode"] = "0", ["message"] = "Successful.",
-            ["payType"] = "qr", ["responseTime"] = "1721720663942", ["extraData"] = "",
+            ["vnp_TmnCode"] = PostgresFixture.TmnCode,
+            ["vnp_TxnRef"] = deposit.OrderId,
+            ["vnp_Amount"] = ((long)deposit.Amount * 100).ToString(),
+            ["vnp_OrderInfo"] = "Deposit",
+            ["vnp_BankCode"] = "NCB",
+            ["vnp_PayDate"] = "20270501120000",
+            ["vnp_TransactionNo"] = "14422548",
+            ["vnp_ResponseCode"] = "00",
+            ["vnp_TransactionStatus"] = "00",
         };
-        fields["signature"] = MomoGateway.Sign(MomoGateway.IpnRawSignature(PostgresFixture.AccessKey, fields), PostgresFixture.SecretKey);
+        fields["vnp_SecureHash"] = VnpayGateway.Sign(VnpayGateway.BuildQueryData(fields), PostgresFixture.HashSecret);
 
         for (var i = 0; i < 3; i++)
         {
             await using var scope = fx.Scope(null);
-            var outcome = await scope.ServiceProvider.GetRequiredService<MomoCallbackService>().HandleAsync(fields);
+            var outcome = await scope.ServiceProvider.GetRequiredService<VnpayCallbackService>().HandleAsync(fields);
             outcome.SignatureValid.Should().BeTrue();
             outcome.Status.Should().Be(PaymentStatus.Paid);
         }
@@ -246,9 +252,9 @@ public class PaymentIdempotencyTests(PostgresFixture fx)
         }
 
         // Tampered callback is rejected and changes nothing.
-        fields["amount"] = "1000";
+        fields["vnp_Amount"] = "100000";
         await using (var scope = fx.Scope(null))
-            (await scope.ServiceProvider.GetRequiredService<MomoCallbackService>().HandleAsync(fields)).SignatureValid.Should().BeFalse();
+            (await scope.ServiceProvider.GetRequiredService<VnpayCallbackService>().HandleAsync(fields)).SignatureValid.Should().BeFalse();
     }
 }
 
@@ -296,7 +302,7 @@ public class TenantIsolationTests(PostgresFixture fx)
             w.UseSetting("ConnectionStrings:Default", fx.ConnectionString);
             w.UseSetting("Jwt:Key", "testing-key-0123456789-0123456789-abcdef");
             w.UseSetting("Database:Seed", "false");
-            w.UseSetting("Momo:Offline", "true");
+            w.UseSetting("Vnpay:Offline", "true");
             w.UseSetting("Storage:Root", Path.Combine(Path.GetTempPath(), "stayra-test-uploads"));
         });
         var owner = new User { Email = "owner@a.test", Name = "A", Role = UserRole.Owner, TenantId = a.Id };

@@ -24,7 +24,7 @@ public enum BookingStatus
 }
 
 public enum PaymentKind { Deposit, Remaining, Extra, Refund }
-public enum PaymentProvider { MoMo, Cash, Manual }
+public enum PaymentProvider { VNPay, Cash, Manual }
 public enum PaymentStatus { Created, Paid, Failed, Expired, Refunded }
 
 public enum ChangeRequestType { ChangeRoom, ChangeDates, Cancel }

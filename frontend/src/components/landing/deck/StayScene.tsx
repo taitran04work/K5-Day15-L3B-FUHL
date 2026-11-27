@@ -1150,7 +1150,7 @@ function ProductCards({ labels, visible }: { labels: SceneLabels; visible: boole
         <Card width={160}>
           <p className="text-[#14201b]/60">{labels.paid}</p>
           <p className="mt-0.5 text-[15px] font-bold tracking-tight">{labels.paidAmount}</p>
-          <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#e9f6ef] px-2 py-0.5 text-[10px] font-semibold text-[#1f7a52]">✓ MoMo</p>
+          <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#e9f6ef] px-2 py-0.5 text-[10px] font-semibold text-[#1f7a52]">✓ VNPay</p>
         </Card>
       </FloatingCard>
       <FloatingCard position={[-1.8, 1.45, 1.25]} delay={650} visible={visible}>

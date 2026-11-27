@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { AlertTriangle, ArrowLeft, FileText, Plus, Trash2, Upload } from "lucide-react"
+import { AlertTriangle, ArrowLeft, FileText, Languages, Plus, RefreshCw, Trash2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -18,6 +18,7 @@ import { useInboxHub } from "@/lib/realtime"
 import { date, relative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { Faq, PolicyDocument, PolicyWarning, RefundAppliesTo, RefundPolicy, RefundRule } from "@/lib/types"
+import { useSettings } from "./settings/BotSettings"
 
 /** Mirrors RefundEngine.Analyze on the server for instant feedback while editing. */
 function analyze(rules: RefundRule[], t: TFunction): PolicyWarning[] {
@@ -369,12 +370,17 @@ function FaqSection() {
 }
 
 export default function Policies() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const qc = useQueryClient()
   const errorMessage = useErrorMessage()
   const [params, setParams] = useSearchParams()
   const reviewId = params.get("review")
   const inputRef = useRef<HTMLInputElement>(null)
+  const settings = useSettings()
+  const [langOverride, setLangOverride] = useState<"vi" | "en" | null>(null)
+  const storeLang: "vi" | "en" = settings.data?.defaultLanguage === "vi" ? "vi" : "en"
+  const analysisLang: "vi" | "en" = langOverride ?? (settings.data ? storeLang : i18n.language?.startsWith("vi") ? "vi" : "en")
+  const setAnalysisLang = (lang: "vi" | "en") => setLangOverride(lang)
   const docs = useQuery({
     queryKey: ["policy-docs"],
     queryFn: () => api.get<PolicyDocument[]>("/api/app/policies/documents"),
@@ -392,6 +398,7 @@ export default function Policies() {
     mutationFn: (file: File) => {
       const form = new FormData()
       form.append("file", file)
+      form.append("language", analysisLang)
       return api.upload<PolicyDocument>("/api/app/policies/documents", form)
     },
     onSuccess: () => {
@@ -400,8 +407,26 @@ export default function Policies() {
     },
     onError: (e) => toast.error(errorMessage(e)),
   })
-  const delDoc = useMutation({ mutationFn: (id: string) => api.del(`/api/app/policies/documents/${id}`), onSuccess: () => void qc.invalidateQueries({ queryKey: ["policy-docs"] }) })
-  const reprocess = useMutation({ mutationFn: (id: string) => api.post(`/api/app/policies/documents/${id}/reprocess`), onSuccess: () => void qc.invalidateQueries({ queryKey: ["policy-docs"] }) })
+  const delDoc = useMutation({
+    mutationFn: (id: string) => api.del(`/api/app/policies/documents/${id}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["policy-docs"] })
+      void qc.invalidateQueries({ queryKey: ["policies"] })
+      void qc.invalidateQueries({ queryKey: ["faqs"] })
+    },
+  })
+  const delDraft = useMutation({
+    mutationFn: (id: string) => api.del(`/api/app/policies/${id}`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["policies"] }),
+  })
+  const reprocess = useMutation({
+    mutationFn: (id: string) => api.post(`/api/app/policies/documents/${id}/reprocess?language=${analysisLang}`),
+    onSuccess: () => {
+      toast.success(t("policies.reanalyzing"))
+      void qc.invalidateQueries({ queryKey: ["policy-docs"] })
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
   const newDraft = useMutation({
     mutationFn: () => api.post<RefundPolicy>("/api/app/policies/draft"),
     onSuccess: (p) => {
@@ -428,25 +453,112 @@ export default function Policies() {
         title={t("policies.title")}
         description={t("policies.description")}
         actions={
-          <Button onClick={() => inputRef.current?.click()} disabled={upload.isPending}>
-            {upload.isPending ? <Spinner /> : <Upload />} {t("policies.upload")}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center rounded-lg border bg-muted/50 p-0.5 text-xs" role="group" aria-label={t("policies.analysisLanguage")}>
+              <span className="hidden items-center gap-1.5 px-2 text-muted-foreground sm:inline-flex">
+                <Languages className="size-3.5" /> {t("policies.analysisLanguage")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAnalysisLang("vi")}
+                className={cn(
+                  "rounded-md px-2.5 py-1 font-medium transition-colors",
+                  analysisLang === "vi" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t("policies.langVi")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAnalysisLang("en")}
+                className={cn(
+                  "rounded-md px-2.5 py-1 font-medium transition-colors",
+                  analysisLang === "en" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t("policies.langEn")}
+              </button>
+            </div>
+            <Button onClick={() => inputRef.current?.click()} disabled={upload.isPending}>
+              {upload.isPending ? <Spinner /> : <Upload />} {t("policies.upload")}
+            </Button>
+          </div>
         }
       />
       <input ref={inputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate(f); e.target.value = "" }} />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-6">
+          <FaqSection />
+        </div>
+
+        <div className="space-y-6">
+          <Section title={t("policies.documents")} description={t("policies.documentsDescription")}>
+            {docs.isLoading ? (
+              <RowsSkeleton rows={2} className="border-0" />
+            ) : !docs.data?.length ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">{t("policies.noDocuments")}</p>
+            ) : (
+              <ul className="-mx-2 divide-y">
+                {docs.data.map((d) => (
+                  <li key={d.id} className="flex items-start gap-3 px-2 py-3">
+                    <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 flex-1">
+                      <a href={d.url} target="_blank" rel="noreferrer" className="block truncate text-sm font-medium hover:underline">
+                        {d.fileName}
+                      </a>
+                      <p className="text-xs text-muted-foreground">
+                        {d.status === "Ready" ? t("policies.docReady", { pages: d.pageCount, chunks: d.chunkCount }) : d.status === "Failed" ? (d.statusDetail ?? t("policies.docFailed")) : t("policies.docProcessing")}
+                        {" · "}
+                        {relative(d.uploadedAt)}
+                      </p>
+                    </div>
+                    {d.status === "Processing" || d.status === "Uploaded" ? (
+                      <Spinner className="mt-0.5 text-muted-foreground" />
+                    ) : (
+                      <div className="flex shrink-0 items-center gap-0.5">
+                        {d.status === "Failed" ? (
+                          <Button size="xs" variant="ghost" onClick={() => reprocess.mutate(d.id)} disabled={reprocess.isPending}>
+                            {t("common.tryAgain")}
+                          </Button>
+                        ) : (
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            onClick={() => reprocess.mutate(d.id)}
+                            disabled={reprocess.isPending}
+                            title={t("policies.reanalyze")}
+                            aria-label={t("policies.reanalyze")}
+                          >
+                            <RefreshCw />
+                          </Button>
+                        )}
+                        <Button size="icon-xs" variant="ghost" onClick={() => delDoc.mutate(d.id)} aria-label={t("common.delete")}>
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+
           {drafts.map((d) => (
             <div key={d.id} className="flex flex-col gap-3 rounded-xl border border-brand/30 bg-brand-soft/50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm font-medium">{t("policies.draftReady", { version: d.version })}</p>
                 <p className="text-sm text-muted-foreground">
                   {t("policies.draftSummary", { count: d.rules.length })}
                   {d.warnings.length > 0 && ` · ${t("policies.warningsCount", { count: d.warnings.length })}`}
                 </p>
               </div>
-              <Button onClick={() => setParams({ review: d.id })}>{t("policies.review")}</Button>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button onClick={() => setParams({ review: d.id })}>{t("policies.review")}</Button>
+                <Button size="icon-sm" variant="ghost" onClick={() => delDraft.mutate(d.id)} disabled={delDraft.isPending} aria-label={t("common.delete")}>
+                  <Trash2 />
+                </Button>
+              </div>
             </div>
           ))}
 
@@ -494,49 +606,6 @@ export default function Policies() {
             )}
           </Section>
 
-          <FaqSection />
-        </div>
-
-        <div className="space-y-6">
-          <Section title={t("policies.documents")} description={t("policies.documentsDescription")}>
-            {docs.isLoading ? (
-              <RowsSkeleton rows={2} className="border-0" />
-            ) : !docs.data?.length ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">{t("policies.noDocuments")}</p>
-            ) : (
-              <ul className="-mx-2 divide-y">
-                {docs.data.map((d) => (
-                  <li key={d.id} className="flex items-start gap-3 px-2 py-3">
-                    <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <a href={d.url} target="_blank" rel="noreferrer" className="block truncate text-sm font-medium hover:underline">
-                        {d.fileName}
-                      </a>
-                      <p className="text-xs text-muted-foreground">
-                        {d.status === "Ready" ? t("policies.docReady", { pages: d.pageCount, chunks: d.chunkCount }) : d.status === "Failed" ? (d.statusDetail ?? t("policies.docFailed")) : t("policies.docProcessing")}
-                        {" · "}
-                        {relative(d.uploadedAt)}
-                      </p>
-                    </div>
-                    {d.status === "Processing" || d.status === "Uploaded" ? (
-                      <Spinner className="mt-0.5 text-muted-foreground" />
-                    ) : (
-                      <div className="flex shrink-0">
-                        {d.status === "Failed" && (
-                          <Button size="xs" variant="ghost" onClick={() => reprocess.mutate(d.id)}>
-                            {t("common.tryAgain")}
-                          </Button>
-                        )}
-                        <Button size="icon-xs" variant="ghost" onClick={() => delDoc.mutate(d.id)} aria-label={t("common.delete")}>
-                          <Trash2 />
-                        </Button>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Section>
           {archived.length > 0 && (
             <Section title={t("policies.history")}>
               <ul className="-mx-2 divide-y">

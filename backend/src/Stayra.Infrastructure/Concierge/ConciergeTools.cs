@@ -244,7 +244,7 @@ public partial class ConciergeTools(
             code = r.Booking.Code, status = r.Booking.Status.ToString(), roomName = r.Room.Name, total = r.Booking.TotalAmount, deposit = r.Booking.DepositAmount,
             holdExpiresAtLocal = r.Booking.HoldExpiresAt is { } h ? TenantTime.ToLocal(ctx.Tenant, h).ToString("HH:mm") : null,
             holdMinutes = ctx.Tenant.HoldMinutes,
-            note = "The guest sees a MoMo payment card. The booking is confirmed automatically once the deposit is paid.",
+            note = "The guest sees a VNPay payment card. The booking is confirmed automatically once the deposit is paid.",
         }, $"Created booking {r.Booking.Code} (held)");
     }
 
@@ -303,7 +303,7 @@ public partial class ConciergeTools(
         var p = await RemainingFor(ctx, b, ct);
         if (p == null) return (new { balance = 0, message = "Nothing left to pay for this booking." }, $"No balance due for {b.Code}");
         ctx.Cards.Add(Cards.PaymentCard(p, b.Code));
-        return (new { balance = p.Amount, note = "The guest sees a MoMo payment card." }, $"Created remaining payment for {b.Code}: {p.Amount:N0} ₫");
+        return (new { balance = p.Amount, note = "The guest sees a VNPay payment card." }, $"Created remaining payment for {b.Code}: {p.Amount:N0} ₫");
     }
 
     private async Task<(object, string)> RequestCheckout(ToolContext ctx, JsonElement i, CancellationToken ct)

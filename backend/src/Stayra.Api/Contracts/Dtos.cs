@@ -67,8 +67,9 @@ public record TenantSettingsDto(
     string CheckInTime, string CheckOutTime, string OpeningTime, string ClosingTime, int CleaningBufferMinutes,
     int DepositPercent, RemainingPaymentTrigger RemainingPaymentTrigger, int RemainingPaymentHours, int RemainingReminderHours, int HoldMinutes,
     bool BotEnabled, string? BotPersona, bool AutoApproveChanges, bool AutoApproveCancellations, LowerPriceHandling LowerPriceHandling,
-    bool ZaloConnected, string? ZaloAppId, string? ZaloOaId, bool MomoCustom, string? MomoPartnerCode,
+    bool ZaloConnected, string? ZaloAppId, string? ZaloOaId, bool VnpayCustom, string? VnpayTmnCode,
     bool AiKeyConfigured, string? AiKeyHint, string? AiModel,
+    bool SmtpCustom, string? SmtpHost, int? SmtpPort, string? SmtpUsername, string? SmtpFromEmail, string? SmtpFromName, bool SmtpEnableSsl,
     string? BgAboutUrl, string? BgRoomsUrl, string? BgPoliciesUrl, string? BgContactUrl)
 {
     public static TenantSettingsDto From(Tenant t) => new(t.Id, t.Slug, t.Name, t.Description, t.Address, t.Phone, t.Email, t.LogoUrl, t.CoverImageUrl,
@@ -76,8 +77,9 @@ public record TenantSettingsDto(
         t.CheckInTime.ToString("HH:mm"), t.CheckOutTime.ToString("HH:mm"), t.OpeningTime.ToString("HH:mm"), t.ClosingTime.ToString("HH:mm"),
         t.CleaningBufferMinutes, t.DepositPercent, t.RemainingPaymentTrigger, t.RemainingPaymentHours, t.RemainingReminderHours, t.HoldMinutes,
         t.BotEnabled, t.BotPersona, t.AutoApproveChanges, t.AutoApproveCancellations, t.LowerPriceHandling,
-        !string.IsNullOrEmpty(t.ZaloAccessTokenEnc), t.ZaloAppId, t.ZaloOaId, !string.IsNullOrEmpty(t.MomoSecretKeyEnc), t.MomoPartnerCode,
+        !string.IsNullOrEmpty(t.ZaloAccessTokenEnc), t.ZaloAppId, t.ZaloOaId, !string.IsNullOrEmpty(t.VnpayHashSecretEnc), t.VnpayTmnCode,
         !string.IsNullOrEmpty(t.AnthropicApiKeyEnc), t.AnthropicKeyHint, t.AiModel,
+        !string.IsNullOrEmpty(t.SmtpPasswordEnc) && !string.IsNullOrEmpty(t.SmtpUsername), t.SmtpHost, t.SmtpPort, t.SmtpUsername, t.SmtpFromEmail, t.SmtpFromName, t.SmtpEnableSsl,
         t.BgAboutUrl, t.BgRoomsUrl, t.BgPoliciesUrl, t.BgContactUrl);
 }
 
