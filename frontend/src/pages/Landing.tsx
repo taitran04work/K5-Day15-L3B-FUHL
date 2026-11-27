@@ -21,6 +21,7 @@ import { BOARD, SHOTS, type SceneLabels, type Shot } from "@/components/landing/
 import type { BoardRefs } from "@/components/landing/deck/StayScene"
 import { CountUp } from "@/components/motion/CountUp"
 import { Reveal, SplitWords, Stagger, StaggerItem, EASE } from "@/components/motion/Reveal"
+import { getLanguageOption, languageOptions } from "@/i18n/languages"
 import { cn } from "@/lib/utils"
 
 const StayScene = lazy(() => import("@/components/landing/deck/StayScene"))
@@ -548,7 +549,7 @@ function HoverSheen({ tone = "bright" }: { tone?: "bright" | "subtle" }) {
 
 function DeckHeader({ go }: { go: (target: number | string) => void }) {
   const { t, i18n } = useTranslation()
-  const currentLng = i18n.language?.startsWith("vi") ? "vi" : "en"
+  const currentLng = getLanguageOption(i18n.language).value
   const links: [string, string][] = [
     ["nen-tang", t("landing.deck.nav.platform")],
     ["trien-khai", t("landing.deck.nav.steps")],
@@ -582,22 +583,17 @@ function DeckHeader({ go }: { go: (target: number | string) => void }) {
         </nav>
         <div className="flex items-center gap-2">
           <div role="radiogroup" aria-label={t("nav.language")} className="hidden items-center gap-0.5 rounded-full bg-white/[0.07] p-0.5 text-xs sm:inline-flex">
-            {(
-              [
-                ["en", "EN", "English"],
-                ["vi", "VN", "Tiếng Việt"],
-              ] as const
-            ).map(([lng, short, label]) => (
+            {languageOptions.map(({ value, short, name }) => (
               <button
-                key={lng}
+                key={value}
                 type="button"
                 role="radio"
-                aria-checked={currentLng === lng}
-                aria-label={label}
-                onClick={() => void i18n.changeLanguage(lng)}
+                aria-checked={currentLng === value}
+                aria-label={name}
+                onClick={() => void i18n.changeLanguage(value)}
                 className={cn(
                   "group relative overflow-hidden rounded-full px-2.5 py-1 font-semibold tracking-wide transition-all duration-300 hover:-translate-y-0.5",
-                  currentLng === lng ? "bg-white/18 text-[#fbf6ec]" : "text-[#f6efe2]/55 hover:text-[#fbf6ec]",
+                  currentLng === value ? "bg-white/18 text-[#fbf6ec]" : "text-[#f6efe2]/55 hover:text-[#fbf6ec]",
                 )}
               >
                 <HoverSheen tone="subtle" />

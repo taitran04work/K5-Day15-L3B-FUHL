@@ -39,14 +39,32 @@ export default function Usage() {
               {d.days.length === 0 ? (
                 <p className="py-10 text-center text-sm text-muted-foreground">{t("admin.noUsage")}</p>
               ) : (
-                <BarSeries caption={t("admin.guestMessages")} data={d.days.map((x) => ({ key: x.date, label: shortDate(x.date), value: x.guestMessages }))} format={number} />
+                <BarSeries
+                  caption={t("admin.guestMessages")}
+                  data={d.days.map((x) => ({
+                    key: x.date,
+                    label: shortDate(x.date),
+                    axisLabel: `${x.date.slice(8, 10)}/${x.date.slice(5, 7)}`,
+                    value: x.guestMessages,
+                  }))}
+                  format={number}
+                />
               )}
             </Section>
             <Section title={t("admin.tokens")} description={t("admin.perDay")}>
               {d.days.length === 0 ? (
                 <p className="py-10 text-center text-sm text-muted-foreground">{t("admin.noUsage")}</p>
               ) : (
-                <BarSeries caption={t("admin.tokens")} data={d.days.map((x) => ({ key: x.date, label: shortDate(x.date), value: x.tokens }))} format={number} />
+                <BarSeries
+                  caption={t("admin.tokens")}
+                  data={d.days.map((x) => ({
+                    key: x.date,
+                    label: shortDate(x.date),
+                    axisLabel: `${x.date.slice(8, 10)}/${x.date.slice(5, 7)}`,
+                    value: x.tokens,
+                  }))}
+                  format={number}
+                />
               )}
             </Section>
           </div>

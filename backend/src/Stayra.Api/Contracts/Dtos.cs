@@ -67,24 +67,30 @@ public record TenantSettingsDto(
     string CheckInTime, string CheckOutTime, string OpeningTime, string ClosingTime, int CleaningBufferMinutes,
     int DepositPercent, RemainingPaymentTrigger RemainingPaymentTrigger, int RemainingPaymentHours, int RemainingReminderHours, int HoldMinutes,
     bool BotEnabled, string? BotPersona, bool AutoApproveChanges, bool AutoApproveCancellations, LowerPriceHandling LowerPriceHandling,
-    bool ZaloConnected, string? ZaloAppId, string? ZaloOaId, bool MomoCustom, string? MomoPartnerCode)
+    bool ZaloConnected, string? ZaloAppId, string? ZaloOaId, bool MomoCustom, string? MomoPartnerCode,
+    bool AiKeyConfigured, string? AiKeyHint, string? AiModel,
+    string? BgAboutUrl, string? BgRoomsUrl, string? BgPoliciesUrl, string? BgContactUrl)
 {
     public static TenantSettingsDto From(Tenant t) => new(t.Id, t.Slug, t.Name, t.Description, t.Address, t.Phone, t.Email, t.LogoUrl, t.CoverImageUrl,
         t.AccentColor, t.Latitude, t.Longitude, t.DefaultLanguage, t.Currency, t.TimeZone,
         t.CheckInTime.ToString("HH:mm"), t.CheckOutTime.ToString("HH:mm"), t.OpeningTime.ToString("HH:mm"), t.ClosingTime.ToString("HH:mm"),
         t.CleaningBufferMinutes, t.DepositPercent, t.RemainingPaymentTrigger, t.RemainingPaymentHours, t.RemainingReminderHours, t.HoldMinutes,
         t.BotEnabled, t.BotPersona, t.AutoApproveChanges, t.AutoApproveCancellations, t.LowerPriceHandling,
-        !string.IsNullOrEmpty(t.ZaloAccessTokenEnc), t.ZaloAppId, t.ZaloOaId, !string.IsNullOrEmpty(t.MomoSecretKeyEnc), t.MomoPartnerCode);
+        !string.IsNullOrEmpty(t.ZaloAccessTokenEnc), t.ZaloAppId, t.ZaloOaId, !string.IsNullOrEmpty(t.MomoSecretKeyEnc), t.MomoPartnerCode,
+        !string.IsNullOrEmpty(t.AnthropicApiKeyEnc), t.AnthropicKeyHint, t.AiModel,
+        t.BgAboutUrl, t.BgRoomsUrl, t.BgPoliciesUrl, t.BgContactUrl);
 }
 
 /// <summary>Public, guest-facing tenant info.</summary>
 public record PublicTenantDto(string Slug, string Name, string? Description, string? Address, string? Phone, string? Email, string? LogoUrl,
     string? CoverImageUrl, string AccentColor, double? Latitude, double? Longitude, string DefaultLanguage, string Currency, string TimeZone,
-    string CheckInTime, string CheckOutTime, string OpeningTime, string ClosingTime, int DepositPercent, int HoldMinutes, bool BotEnabled)
+    string CheckInTime, string CheckOutTime, string OpeningTime, string ClosingTime, int DepositPercent, int HoldMinutes, bool BotEnabled,
+    string? BgAboutUrl, string? BgRoomsUrl, string? BgPoliciesUrl, string? BgContactUrl)
 {
     public static PublicTenantDto From(Tenant t) => new(t.Slug, t.Name, t.Description, t.Address, t.Phone, t.Email, t.LogoUrl, t.CoverImageUrl,
         t.AccentColor, t.Latitude, t.Longitude, t.DefaultLanguage, t.Currency, t.TimeZone, t.CheckInTime.ToString("HH:mm"), t.CheckOutTime.ToString("HH:mm"),
-        t.OpeningTime.ToString("HH:mm"), t.ClosingTime.ToString("HH:mm"), t.DepositPercent, t.HoldMinutes, t.BotEnabled);
+        t.OpeningTime.ToString("HH:mm"), t.ClosingTime.ToString("HH:mm"), t.DepositPercent, t.HoldMinutes, t.BotEnabled,
+        t.BgAboutUrl, t.BgRoomsUrl, t.BgPoliciesUrl, t.BgContactUrl);
 }
 
 public record FaqDto(Guid Id, string Question, string Answer, FaqStatus Status, int SortOrder)

@@ -5,6 +5,7 @@ using Stayra.Api.Contracts;
 using Stayra.Api.Infrastructure;
 using Stayra.Application.Common;
 using Stayra.Domain;
+using Stayra.Infrastructure.Concierge;
 
 namespace Stayra.Api.Controllers;
 
@@ -15,9 +16,14 @@ public record BookingSettingsInput(string CheckInTime, string CheckOutTime, stri
     int DepositPercent, RemainingPaymentTrigger RemainingPaymentTrigger, int RemainingPaymentHours, int RemainingReminderHours, int HoldMinutes,
     LowerPriceHandling LowerPriceHandling);
 
-public record BotSettingsInput(bool BotEnabled, string? BotPersona, bool AutoApproveChanges, bool AutoApproveCancellations, string DefaultLanguage);
+// Older clients still include DefaultLanguage. Only the website settings endpoint saves it.
+public record BotSettingsInput(bool BotEnabled, string? BotPersona, bool AutoApproveChanges, bool AutoApproveCancellations, string DefaultLanguage = "");
 
 public record MomoSettingsInput(string? PartnerCode, string? AccessKey, string? SecretKey);
+
+/// <summary>Bring-your-own AI key. <c>ApiKey</c> is write-only: it's verified, encrypted and never returned.</summary>
+public record AiSettingsInput(string? ApiKey, string? Model, bool RemoveKey = false);
+public record AiTestResult(bool Ok, string? Error);
 
 public class WebsiteSettingsValidator : AbstractValidator<WebsiteSettingsInput>
 {
@@ -101,7 +107,6 @@ public class SettingsController(IFileStorage storage, ISecretProtector secrets) 
         t.BotPersona = i.BotPersona?.Trim() is { Length: > 0 } p ? (p.Length > 1000 ? p[..1000] : p) : null;
         t.AutoApproveChanges = i.AutoApproveChanges;
         t.AutoApproveCancellations = i.AutoApproveCancellations;
-        if (i.DefaultLanguage is "en" or "vi") t.DefaultLanguage = i.DefaultLanguage;
         await Save("settings.bot");
         return TenantSettingsDto.From(t);
     }
@@ -118,17 +123,57 @@ public class SettingsController(IFileStorage storage, ISecretProtector secrets) 
         return TenantSettingsDto.From(t);
     }
 
+    [HttpPut("ai")]
+    public async Task<TenantSettingsDto> Ai(AiSettingsInput i, CancellationToken ct)
+    {
+        var t = await CurrentTenantAsync();
+        if (!string.IsNullOrWhiteSpace(i.Model))
+        {
+            if (!TenantAi.Models.Contains(i.Model))
+                throw new AppException(400, "invalid", "Unknown model.", new Dictionary<string, string[]> { ["model"] = ["invalid"] });
+            t.AiModel = i.Model;
+        }
+        if (i.RemoveKey)
+        {
+            t.AnthropicApiKeyEnc = null;
+            t.AnthropicKeyHint = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(i.ApiKey))
+        {
+            var key = i.ApiKey.Trim();
+            // verify before storing; only a definitely-wrong key or model is rejected (network hiccups still save)
+            var (ok, error) = await TenantAi.TestKeyAsync(key, t.AiModel ?? TenantAi.Models[0], ct);
+            if (!ok && error is "invalid_key" or "model_unavailable")
+                throw new AppException(400, error, "The AI provider rejected this key.", new Dictionary<string, string[]> { ["apiKey"] = [error] });
+            t.AnthropicApiKeyEnc = secrets.Protect(key);
+            t.AnthropicKeyHint = TenantAi.Hint(key);
+        }
+        await Save("settings.ai");
+        return TenantSettingsDto.From(t);
+    }
+
+    /// <summary>Checks the stored key against the provider without changing anything.</summary>
+    [HttpPost("ai/test")]
+    public async Task<AiTestResult> TestAi([FromServices] TenantAi ai, CancellationToken ct)
+    {
+        var t = await CurrentTenantAsync();
+        var key = secrets.Unprotect(t.AnthropicApiKeyEnc);
+        if (string.IsNullOrWhiteSpace(key)) return new AiTestResult(false, "no_key");
+        var (ok, error) = await TenantAi.TestKeyAsync(key, ai.Model(t), ct);
+        return new AiTestResult(ok, error);
+    }
+
     [HttpPost("images/{kind}")]
     [RequestSizeLimit(20_000_000)]
     public async Task<TenantSettingsDto> UploadImage(string kind, IFormFile file)
     {
-        if (kind is not ("logo" or "cover")) throw AppException.NotFound("Image type");
+        if (!ImageSlots.Contains(kind)) throw AppException.NotFound("Image type");
         if (file == null || !file.ContentType.StartsWith("image/")) throw AppException.BadRequest("not_an_image", "Choose an image file.");
         var t = await CurrentTenantAsync();
         var ext = file.ContentType switch { "image/webp" => "webp", "image/png" => "png", "image/svg+xml" => "svg", _ => "jpg" };
         await using var s = file.OpenReadStream();
         var url = await storage.SaveAsync(s, $"{t.Id}/{kind}-{Guid.NewGuid():N}.{ext}", file.ContentType);
-        if (kind == "logo") t.LogoUrl = url; else t.CoverImageUrl = url;
+        SetImage(t, kind, url);
         await Save($"settings.{kind}");
         return TenantSettingsDto.From(t);
     }
@@ -136,10 +181,27 @@ public class SettingsController(IFileStorage storage, ISecretProtector secrets) 
     [HttpDelete("images/{kind}")]
     public async Task<TenantSettingsDto> RemoveImage(string kind)
     {
+        if (!ImageSlots.Contains(kind)) throw AppException.NotFound("Image type");
         var t = await CurrentTenantAsync();
-        if (kind == "logo") t.LogoUrl = null; else if (kind == "cover") t.CoverImageUrl = null;
+        SetImage(t, kind, null);
         await Save($"settings.{kind}.removed");
         return TenantSettingsDto.From(t);
+    }
+
+    /// <summary>Logo, cover (= home hero background) and the per-slide home page backgrounds.</summary>
+    private static readonly string[] ImageSlots = ["logo", "cover", "bg-about", "bg-rooms", "bg-policies", "bg-contact"];
+
+    private static void SetImage(Tenant t, string kind, string? url)
+    {
+        switch (kind)
+        {
+            case "logo": t.LogoUrl = url; break;
+            case "cover": t.CoverImageUrl = url; break;
+            case "bg-about": t.BgAboutUrl = url; break;
+            case "bg-rooms": t.BgRoomsUrl = url; break;
+            case "bg-policies": t.BgPoliciesUrl = url; break;
+            case "bg-contact": t.BgContactUrl = url; break;
+        }
     }
 
     private async Task Save(string action)

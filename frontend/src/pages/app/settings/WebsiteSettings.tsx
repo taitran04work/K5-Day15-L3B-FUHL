@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { ExternalLink, ImagePlus } from "lucide-react"
+import { ExternalLink, ImagePlus, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Page } from "@/components/layout/AppShell"
 import { ErrorState, Field, PageHeader, Section, Spinner, useErrorMessage, useFieldError } from "@/components/common"
 import { PhotoTile } from "@/components/booking/BookingParts"
+import { getLanguageOption, languageOptions } from "@/i18n/languages"
 import { api } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { brandStyle, isBrandColor } from "@/lib/brand"
@@ -17,8 +19,27 @@ import { resizeToWebp } from "@/lib/image"
 import { cn } from "@/lib/utils"
 import type { TenantSettings } from "@/lib/types"
 import { useSettings } from "./BotSettings"
+import { homeBackdrops } from "@/lib/homeBackdrops"
+import { usePublicHome } from "@/pages/public/PublicLayout"
 
+type ImageKind = "logo" | "cover" | "bg-about" | "bg-rooms" | "bg-policies" | "bg-contact"
+type BgKind = Exclude<ImageKind, "logo" | "cover">
+
+/** Home page slides that can have their own background (the hero uses the cover photo). */
+const BG_SLOTS: { kind: BgKind; field: "bgAboutUrl" | "bgRoomsUrl" | "bgPoliciesUrl" | "bgContactUrl"; slide: string; label: string }[] = [
+  { kind: "bg-about", field: "bgAboutUrl", slide: "gioi-thieu", label: "public.deck.navAbout" },
+  { kind: "bg-rooms", field: "bgRoomsUrl", slide: "rooms", label: "public.deck.navRooms" },
+  { kind: "bg-policies", field: "bgPoliciesUrl", slide: "chinh-sach", label: "public.deck.navPolicies" },
+  { kind: "bg-contact", field: "bgContactUrl", slide: "lien-he", label: "public.deck.navContact" },
+]
+
+const IMAGE_FIELDS = ["logoUrl", "coverImageUrl", "bgAboutUrl", "bgRoomsUrl", "bgPoliciesUrl", "bgContactUrl"] as const
 const SWATCHES = ["#1F5F4A", "#111111", "#B83A0B", "#2F4858", "#5B4636", "#7A3B3B", "#3D4F7D", "#4B5D3A"]
+
+function websiteValues(settings: TenantSettings) {
+  const { name, description, address, phone, email, accentColor, latitude, longitude, defaultLanguage } = settings
+  return { name, description, address, phone, email, accentColor, latitude, longitude, defaultLanguage }
+}
 
 export default function WebsiteSettings() {
   const { t } = useTranslation()
@@ -27,21 +48,22 @@ export default function WebsiteSettings() {
   const settings = useSettings()
   const fieldError = useFieldError()
   const errorMessage = useErrorMessage()
-  const [s, setS] = useState<TenantSettings | null>(null)
+  const [draft, setDraft] = useState<Partial<TenantSettings>>({})
+  const s = settings.data ? { ...settings.data, ...draft } : null
   const logoRef = useRef<HTMLInputElement>(null)
   const coverRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (settings.data) setS(settings.data)
-  }, [settings.data])
+  const bgRef = useRef<HTMLInputElement>(null)
+  const [bgTarget, setBgTarget] = useState<BgKind | null>(null)
+  // what guests actually see behind each slide (auto picks included), from the same data the home page uses
+  const publicHome = usePublicHome(settings.data?.slug ?? "")
+  const backdrops = useMemo(() => (publicHome.data ? homeBackdrops(publicHome.data) : null), [publicHome.data])
 
   const save = useMutation({
-    mutationFn: () =>
-      api.put<TenantSettings>("/api/app/settings/website", {
-        name: s!.name, description: s!.description, address: s!.address, phone: s!.phone, email: s!.email,
-        accentColor: s!.accentColor, latitude: s!.latitude, longitude: s!.longitude, defaultLanguage: s!.defaultLanguage,
-      }),
-    onSuccess: (res) => {
-      qc.setQueryData(["settings"], res)
+    mutationFn: (values: TenantSettings) =>
+      api.put<TenantSettings>("/api/app/settings/website", websiteValues(values)),
+    onSuccess: (res, saved) => {
+      qc.setQueryData<TenantSettings>(["settings"], (current) => current ? { ...current, ...websiteValues(res) } : res)
+      setDraft((current) => Object.fromEntries(Object.entries(current).filter(([key, value]) => value !== saved[key as keyof TenantSettings])))
       void qc.invalidateQueries({ queryKey: ["public"] })
       void refresh()
       toast.success(t("common.saved"))
@@ -49,22 +71,31 @@ export default function WebsiteSettings() {
     onError: (e) => toast.error(errorMessage(e)),
   })
   const upload = useMutation({
-    mutationFn: async ({ kind, file }: { kind: "logo" | "cover"; file: File }) => {
+    mutationFn: async ({ kind, file }: { kind: ImageKind; file: File }) => {
       const form = new FormData()
       form.append("file", await resizeToWebp(file, kind === "logo" ? 512 : 2400))
       return api.upload<TenantSettings>(`/api/app/settings/images/${kind}`, form)
     },
-    onSuccess: (res) => {
-      qc.setQueryData(["settings"], res)
-      setS((x) => (x ? { ...x, logoUrl: res.logoUrl, coverImageUrl: res.coverImageUrl } : x))
-      toast.success(t("common.saved"))
-    },
+    onSuccess: (res) => onImages(res),
     onError: (e) => toast.error(errorMessage(e)),
   })
+  const removeImage = useMutation({
+    mutationFn: (kind: ImageKind) => api.del<TenantSettings>(`/api/app/settings/images/${kind}`),
+    onSuccess: (res) => onImages(res),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  // Image updates use the saved settings. Form edits are held separately until Save.
+  function onImages(res: TenantSettings) {
+    qc.setQueryData<TenantSettings>(["settings"], (current) => current
+      ? { ...current, ...Object.fromEntries(IMAGE_FIELDS.map((key) => [key, res[key]])) }
+      : res)
+    void qc.invalidateQueries({ queryKey: ["public"] })
+    toast.success(t("common.saved"))
+  }
 
   if (settings.error) return <Page narrow><ErrorState error={settings.error} onRetry={() => void settings.refetch()} /></Page>
   if (!s) return <Page narrow><Skeleton className="h-8 w-48" /><Skeleton className="mt-6 h-64 w-full" /></Page>
-  const set = <K extends keyof TenantSettings>(k: K, v: TenantSettings[K]) => setS({ ...s, [k]: v })
+  const set = <K extends keyof TenantSettings>(k: K, v: TenantSettings[K]) => setDraft((current) => ({ ...current, [k]: v }))
   const validColor = isBrandColor(s.accentColor)
   const colorError = validColor ? fieldError(save.error, "accentColor") : t("validation.color_format")
   const preview = brandStyle(validColor ? s.accentColor : settings.data?.accentColor)
@@ -81,13 +112,23 @@ export default function WebsiteSettings() {
                 {t("website.view")} <ExternalLink />
               </a>
             </Button>
-            <Button onClick={() => save.mutate()} disabled={save.isPending || !validColor}>
+            <Button onClick={() => save.mutate(s)} disabled={save.isPending || !validColor}>
               {save.isPending && <Spinner />} {t("common.saveChanges")}
             </Button>
           </>
         }
       />
       <div className="space-y-6">
+        <Section title={t("website.display")}>
+          <Field label={t("website.guestLanguage")} htmlFor="guest-language" hint={t("website.guestLanguageHint")} error={fieldError(save.error, "defaultLanguage")}>
+            <Select value={getLanguageOption(s.defaultLanguage).value} onValueChange={(v) => set("defaultLanguage", v)}>
+              <SelectTrigger id="guest-language" className="w-full sm:w-64"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {languageOptions.map(({ value, short }) => <SelectItem key={value} value={value}>{short}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </Field>
+        </Section>
         <Section title={t("website.images")}>
           <div className="grid gap-6 sm:grid-cols-[160px_1fr]">
             <div>
@@ -103,9 +144,77 @@ export default function WebsiteSettings() {
                 {s.coverImageUrl ? <PhotoTile url={s.coverImageUrl} alt="" className="aspect-[21/9] w-full" /> : <span className="flex aspect-[21/9] items-center justify-center text-muted-foreground"><ImagePlus className="size-5" /></span>}
               </button>
               <input ref={coverRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate({ kind: "cover", file: f }); e.target.value = "" }} />
+              <p className="mt-2 text-xs text-muted-foreground">{t("website.coverHint")}</p>
               {upload.isPending && <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><Spinner className="size-3" /> {t("website.uploading")}</p>}
             </div>
           </div>
+        </Section>
+
+        <Section title={t("website.backgrounds")} description={t("website.backgroundsHint")}>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            {BG_SLOTS.map(({ kind, field, slide, label }) => {
+              const url = s[field]
+              const auto = !url ? backdrops?.[slide]?.url : undefined
+              return (
+                <div key={kind}>
+                  <p className="mb-2 text-sm font-medium">{t(label)}</p>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      aria-label={t(label)}
+                      onClick={() => { setBgTarget(kind); bgRef.current?.click() }}
+                      className="block w-full overflow-hidden rounded-xl border border-dashed hover:opacity-95"
+                    >
+                      {url ? (
+                        <PhotoTile url={url} alt="" className="aspect-[4/3] w-full" />
+                      ) : auto ? (
+                        <span className="group relative block">
+                          <PhotoTile url={auto} alt="" className="aspect-[4/3] w-full" />
+                          <span className="absolute bottom-1.5 left-1.5 rounded-full bg-black/65 px-2 py-0.5 text-[11px] font-medium text-white">
+                            {t("website.autoBackground")}
+                          </span>
+                          <span className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/45 text-xs font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
+                            <ImagePlus className="size-4" /> {t("website.replaceBackground")}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="flex aspect-[4/3] flex-col items-center justify-center gap-1 text-xs text-muted-foreground">
+                          <ImagePlus className="size-5" />
+                          {t("website.autoBackground")}
+                        </span>
+                      )}
+                    </button>
+                    {url && (
+                      <button
+                        type="button"
+                        onClick={() => removeImage.mutate(kind)}
+                        aria-label={t("common.remove", { defaultValue: "Remove" })}
+                        className="absolute right-1.5 top-1.5 flex size-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                      >
+                        <X className="size-4" />
+                      </button>
+                    )}
+                    {upload.isPending && upload.variables?.kind === kind && (
+                      <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-background/70">
+                        <Spinner className="size-4" />
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <input
+            ref={bgRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f && bgTarget) upload.mutate({ kind: bgTarget, file: f })
+              e.target.value = ""
+            }}
+          />
         </Section>
 
         <Section title={t("website.details")}>
@@ -135,6 +244,16 @@ export default function WebsiteSettings() {
                 <Input type="number" step="0.0001" value={s.longitude ?? ""} onChange={(e) => set("longitude", e.target.value === "" ? null : Number(e.target.value))} className="tabular" />
               </Field>
             </div>
+            {s.latitude != null && s.longitude != null && Math.abs(s.latitude) <= 90 && Math.abs(s.longitude) <= 180 && (
+              <iframe
+                key={`${s.latitude},${s.longitude}`}
+                title={t("admin.mapPreview")}
+                src={`https://www.google.com/maps?q=${s.latitude},${s.longitude}&z=15&output=embed`}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                className="block h-56 w-full rounded-xl border bg-muted"
+              />
+            )}
           </div>
         </Section>
 

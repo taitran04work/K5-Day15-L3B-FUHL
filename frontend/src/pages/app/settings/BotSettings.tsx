@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { AlertTriangle, Bot, Clock, ShieldCheck, SlidersHorizontal, Wallet } from "lucide-react"
+import { Bot, Clock, ShieldCheck, SlidersHorizontal, Wallet } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { Page } from "@/components/layout/AppShell"
 import { ErrorState, Field, PageHeader, Section, Spinner, Stat, useErrorMessage, useFieldError } from "@/components/common"
-import { useDevConfig } from "@/components/booking/BookingParts"
+import { AiKeyCard } from "@/components/app/AiKeyCard"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import type { LowerPriceHandling, RemainingPaymentTrigger, TenantSettings } from "@/lib/types"
@@ -37,7 +37,6 @@ export default function BotSettings() {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const settings = useSettings()
-  const dev = useDevConfig()
   const fieldError = useFieldError()
   const errorMessage = useErrorMessage()
   const [s, setS] = useState<TenantSettings | null>(null)
@@ -46,7 +45,7 @@ export default function BotSettings() {
   }, [settings.data])
 
   const saveBot = useMutation({
-    mutationFn: () => api.put<TenantSettings>("/api/app/settings/bot", { botEnabled: s!.botEnabled, botPersona: s!.botPersona, autoApproveChanges: s!.autoApproveChanges, autoApproveCancellations: s!.autoApproveCancellations, defaultLanguage: s!.defaultLanguage }),
+    mutationFn: () => api.put<TenantSettings>("/api/app/settings/bot", { botEnabled: s!.botEnabled, botPersona: s!.botPersona, autoApproveChanges: s!.autoApproveChanges, autoApproveCancellations: s!.autoApproveCancellations }),
   })
   const saveBooking = useMutation({
     mutationFn: () =>
@@ -102,16 +101,6 @@ export default function BotSettings() {
       />
 
       <div className="space-y-6">
-        {/* Offline AI notice banner when ANTHROPIC_API_KEY is missing */}
-        {dev.data && !dev.data.aiEnabled && (
-          <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/80 px-5 py-4 text-sm text-amber-900 dark:border-warning/30 dark:bg-warning/10 dark:text-warning">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-warning" aria-hidden />
-            <div>
-              <span className="font-medium">{t("botSettings.offlineTitle")}:</span>{" "}
-              <span>{t("botSettings.offlineBody")}</span>
-            </div>
-          </div>
-        )}
 
         {/* At-a-glance summary cards matching Overview */}
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -123,7 +112,6 @@ export default function BotSettings() {
                 <span>{s.botEnabled ? t("botSettings.enabled") : t("rooms.hidden")}</span>
               </span>
             }
-            hint={s.defaultLanguage === "vi" ? "Tiếng Việt" : "English"}
           />
           <Stat
             label={t("botSettings.deposit")}
@@ -145,6 +133,7 @@ export default function BotSettings() {
         {/* Balanced 2-column workspace layout */}
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-start">
           <div className="space-y-6">
+            <AiKeyCard settings={settings.data ?? s} />
             <Section
               title={t("botSettings.assistant")}
               actions={<Bot className="size-4 text-muted-foreground" aria-hidden />}
@@ -165,19 +154,6 @@ export default function BotSettings() {
                       onChange={(e) => set("botPersona", e.target.value)}
                       placeholder={t("botSettings.personaPlaceholder")}
                     />
-                  </Field>
-                </div>
-                <div className="pt-4">
-                  <Field label={t("botSettings.language")} hint={t("botSettings.languageHint")}>
-                    <Select value={s.defaultLanguage} onValueChange={(v) => set("defaultLanguage", v)}>
-                      <SelectTrigger className="w-full sm:w-64">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="en">English</SelectItem>
-                        <SelectItem value="vi">Tiếng Việt</SelectItem>
-                      </SelectContent>
-                    </Select>
                   </Field>
                 </div>
               </div>

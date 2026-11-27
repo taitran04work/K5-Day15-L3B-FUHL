@@ -15,8 +15,9 @@ import { Field, KeyValue, Spinner, StatusBadge, useErrorMessage } from "@/compon
 import { PaymentCard, PhotoTile } from "@/components/booking/BookingParts"
 import { GuestStepper, HourPicker, ModeToggle, NightRangePicker, defaultStay, useBusy, type StayValue } from "@/components/booking/StayPicker"
 import { api } from "@/lib/api"
-import { dateTime, isoDate, money, normalizePhone, rememberBookingPhone, shortDate, stayLabel, time, vnPhone } from "@/lib/format"
+import { isoDate, normalizePhone, rememberBookingPhone, useLocalizedFormat, vnPhone } from "@/lib/format"
 import type { ChangeQuote, GuestBooking, Payment, PublicTenant, RefundQuote, Room } from "@/lib/types"
+import { GuestPageHeading } from "./GuestVisuals"
 import { usePublic } from "./PublicLayout"
 
 export function useGuestBooking(slug: string, code: string | null, phone: string | null) {
@@ -30,13 +31,14 @@ export function useGuestBooking(slug: string, code: string | null, phone: string
 
 export function BookingSummaryCard({ booking, tenant }: { booking: GuestBooking; tenant: PublicTenant }) {
   const { t } = useTranslation()
+  const { money, shortDate, stayLabel, time } = useLocalizedFormat()
   return (
-    <div className="overflow-hidden rounded-2xl border bg-card">
+    <div className="guest-panel overflow-hidden">
       <div className="flex items-center gap-4 border-b px-5 py-4">
         <PhotoTile url={booking.room.coverUrl} alt={booking.room.name} className="size-20 shrink-0 rounded-xl" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2.5">
-            <p className="text-lg font-semibold tracking-tight text-foreground">{booking.room.name}</p>
+            <p className="font-display text-lg font-bold text-foreground">{booking.room.name}</p>
             <StatusBadge status={booking.status} />
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">{stayLabel(booking.mode, booking.startAt, booking.endAt)}</p>
@@ -73,6 +75,7 @@ function ChangeDialog({ open, onOpenChange, booking, slug, phone, tenant, rooms 
   rooms: Room[]
 }) {
   const { t } = useTranslation()
+  const { money, time } = useLocalizedFormat()
   const errorMessage = useErrorMessage()
   const qc = useQueryClient()
   const local = (iso: string) => {
@@ -103,9 +106,9 @@ function ChangeDialog({ open, onOpenChange, booking, slug, phone, tenant, rooms 
   const q = quote.data
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="guest-storefront sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="text-xl font-bold tracking-tight">{t("manage.changeTitle")}</DialogTitle>
+          <DialogTitle className="font-display text-xl font-bold">{t("manage.changeTitle")}</DialogTitle>
           <DialogDescription>{t("manage.changeDescription")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -172,6 +175,7 @@ function ChangeDialog({ open, onOpenChange, booking, slug, phone, tenant, rooms 
 
 function CancelDialog({ open, onOpenChange, booking, slug, phone }: { open: boolean; onOpenChange: (o: boolean) => void; booking: GuestBooking; slug: string; phone: string }) {
   const { t } = useTranslation()
+  const { money } = useLocalizedFormat()
   const errorMessage = useErrorMessage()
   const qc = useQueryClient()
   const [reason, setReason] = useState("")
@@ -190,9 +194,9 @@ function CancelDialog({ open, onOpenChange, booking, slug, phone }: { open: bool
   })
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="guest-storefront">
         <DialogHeader>
-          <DialogTitle className="text-xl font-bold tracking-tight">{t("manage.cancelTitle")}</DialogTitle>
+          <DialogTitle className="font-display text-xl font-bold">{t("manage.cancelTitle")}</DialogTitle>
           <DialogDescription>{t("manage.cancelDescription", { code: booking.code })}</DialogDescription>
         </DialogHeader>
         {quote.isLoading ? (
@@ -226,6 +230,7 @@ function CancelDialog({ open, onOpenChange, booking, slug, phone }: { open: bool
 
 export function GuestBookingView({ booking, slug, phone }: { booking: GuestBooking; slug: string; phone: string }) {
   const { t } = useTranslation()
+  const { dateTime, money } = useLocalizedFormat()
   const { home } = usePublic()
   const errorMessage = useErrorMessage()
   const qc = useQueryClient()
@@ -244,7 +249,7 @@ export function GuestBookingView({ booking, slug, phone }: { booking: GuestBooki
       <BookingSummaryCard booking={booking} tenant={home.tenant} />
 
       {booking.pendingRequest && (
-        <div className="rounded-2xl border bg-card px-5 py-4 text-sm">
+        <div className="guest-panel px-5 py-4 text-sm">
           <p className="font-medium text-foreground">{booking.pendingRequest.type === "Cancel" ? t("manage.pendingCancel") : t("manage.pendingChange")}</p>
           <p className="mt-1 text-muted-foreground">{t("manage.pendingHint")}</p>
         </div>
@@ -253,7 +258,7 @@ export function GuestBookingView({ booking, slug, phone }: { booking: GuestBooki
       {open ? (
         <PaymentCard slug={slug} payment={open} onPaid={() => void qc.invalidateQueries({ queryKey: ["guest-booking", slug, booking.code] })} />
       ) : booking.balance > 0 && ["Hold", "PendingDeposit", "Confirmed", "CheckedIn"].includes(booking.status) ? (
-        <div className="flex flex-col gap-4 rounded-2xl border bg-card p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="guest-panel flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm text-muted-foreground">{["Hold", "PendingDeposit"].includes(booking.status) ? t("payment.kind.Deposit") : t("payment.kind.Remaining")}</p>
             <p className="mt-0.5 text-xl font-semibold tabular text-foreground">{money(["Hold", "PendingDeposit"].includes(booking.status) ? booking.depositAmount : booking.balance)}</p>
@@ -283,8 +288,8 @@ export function GuestBookingView({ booking, slug, phone }: { booking: GuestBooki
 
       {booking.payments.length > 0 && (
         <section className="pt-2">
-          <h2 className="text-2xl font-bold tracking-tight">{t("manage.payments")}</h2>
-          <ul className="mt-4 divide-y rounded-2xl border bg-card">
+          <h2 className="font-display text-2xl font-bold">{t("manage.payments")}</h2>
+          <ul className="guest-panel mt-4 divide-y">
             {booking.payments.map((p) => (
               <li key={p.id} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
                 <div>
@@ -337,11 +342,11 @@ export default function ManageBooking() {
   }, [booking.data, lookup, params, setParams])
 
   return (
-    <div className="mx-auto max-w-2xl px-4 pb-16 pt-10 sm:px-6 sm:pt-12">
-      <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-        {booking.data ? t("manage.bookingTitle", { code: booking.data.code }) : t("manage.title")}
-      </h1>
-      {!booking.data && <p className="mt-2 text-sm leading-relaxed text-muted-foreground sm:text-base">{t("manage.description")}</p>}
+    <div className="mx-auto max-w-3xl px-4 pb-16 pt-10 sm:px-8 sm:pt-14">
+      <GuestPageHeading
+        title={booking.data ? t("manage.bookingTitle", { code: booking.data.code }) : t("manage.title")}
+        description={!booking.data ? t("manage.description") : undefined}
+      />
 
       {booking.isFetching && !booking.data && lookup ? (
         <div className="mt-8 space-y-4">
@@ -364,7 +369,7 @@ export default function ManageBooking() {
         </div>
       ) : (
         <form
-          className="mt-8 space-y-5 rounded-2xl border bg-card p-6 sm:p-8"
+          className="guest-panel mt-8 space-y-5 p-5 sm:p-8"
           noValidate
           onSubmit={form.handleSubmit((v) => setLookup({ code: v.code.trim().toUpperCase(), phone: normalizePhone(v.phone) }))}
         >

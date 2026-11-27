@@ -17,6 +17,7 @@ const ResetPassword = lazy(() => import("@/pages/auth/ResetPassword"))
 
 const PublicLayout = lazy(() => import("@/pages/public/PublicLayout"))
 const TenantHome = lazy(() => import("@/pages/public/TenantHome"))
+const PublicRoomsPage = lazy(() => import("@/pages/public/RoomsPage"))
 const RoomPage = lazy(() => import("@/pages/public/RoomPage"))
 const BookPage = lazy(() => import("@/pages/public/BookPage"))
 const ConfirmationPage = lazy(() => import("@/pages/public/ConfirmationPage"))
@@ -28,6 +29,7 @@ const CalendarPage = lazy(() => import("@/pages/app/CalendarPage"))
 const Bookings = lazy(() => import("@/pages/app/Bookings"))
 const Inbox = lazy(() => import("@/pages/app/Inbox"))
 const Rooms = lazy(() => import("@/pages/app/Rooms"))
+const RoomDetail = lazy(() => import("@/pages/app/RoomDetail"))
 const Pricing = lazy(() => import("@/pages/app/Pricing"))
 const Policies = lazy(() => import("@/pages/app/Policies"))
 const Payments = lazy(() => import("@/pages/app/Payments"))
@@ -73,13 +75,13 @@ function RouteCurtain({ system }: { system: boolean }) {
       data-system={system || undefined}
       initial={{ y: "100%" }}
       animate={{ y: ["100%", "0%", "0%", "-100%"] }}
-      transition={{ duration: 1.15, times: [0, 0.36, 0.6, 1], ease: CURTAIN_EASE }}
+      transition={{ duration: 0.9, times: [0, 0.32, 0.58, 1], ease: CURTAIN_EASE }}
     >
       <motion.span
         className="flex items-center gap-3 text-[#f3ecdf]"
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: [0, 1, 1, 0], y: [16, 0, 0, -16] }}
-        transition={{ duration: 1.15, times: [0.2, 0.4, 0.58, 0.8] }}
+        initial={{ opacity: 0, y: 14 }}
+        animate={{ opacity: [0, 1, 1, 0], y: [14, 0, 0, -14] }}
+        transition={{ duration: 0.9, times: [0.16, 0.34, 0.58, 0.8] }}
       >
         <Logo tone="light" className={system ? "h-20" : "h-14"} />
       </motion.span>
@@ -99,19 +101,17 @@ function RouteTransitionShell() {
   }, [pathname, hash])
 
   const managementSection = /^\/(app|admin)(?:\/|$)/i.exec(pathname)?.[1]?.toLowerCase()
+  const tenantBase = /^(\/h\/[^/]+)/i.exec(pathname)?.[1]?.toLowerCase()
   const authRoute = /^\/(login|forgot-password|reset-password)\/?$/i.test(pathname)
-  const groupKey = managementSection ?? (authRoute ? "auth" : pathname)
+  const groupKey = managementSection ?? tenantBase ?? (authRoute ? "auth" : pathname)
   const system = usesSystemTheme(pathname)
 
-  // show the curtain only for real navigations, not the first paint
+  // show the curtain only for real cross-group navigations, not within one property's storefront
   const [prevKey, setPrevKey] = useState(groupKey)
   const [navigated, setNavigated] = useState(false)
   if (prevKey !== groupKey) {
-    // moving around one property's guest pages keeps its own branding: fade only, no Stayra curtain
-    const tenantOf = (k: string) => (k.startsWith("/h/") ? k.split("/").slice(0, 3).join("/") : null)
-    const sameTenant = tenantOf(prevKey) !== null && tenantOf(prevKey) === tenantOf(groupKey)
     setPrevKey(groupKey)
-    setNavigated(!sameTenant)
+    setNavigated(true)
   }
 
   return (
@@ -119,9 +119,13 @@ function RouteTransitionShell() {
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={groupKey}
-          initial={reduce ? false : { opacity: 0, y: 28, scale: 0.985 }}
-          animate={reduce ? { opacity: 1, transition: { duration: 0 } } : { opacity: 1, y: 0, scale: 1, transition: { duration: 0.6, delay: 0.28, ease: [0.22, 1, 0.36, 1] } }}
-          exit={reduce ? { opacity: 1, transition: { duration: 0 } } : { opacity: 0, y: -24, scale: 0.985, transition: { duration: 0.38, ease: [0.4, 0, 1, 1] } }}
+          initial={reduce ? false : { opacity: 0 }}
+          animate={
+            reduce
+              ? { opacity: 1, transition: { duration: 0 } }
+              : { opacity: 1, transition: { duration: 0.32, delay: navigated ? 0.16 : 0, ease: [0.22, 1, 0.36, 1] } }
+          }
+          exit={reduce ? { opacity: 1, transition: { duration: 0 } } : { opacity: 0, transition: { duration: 0.22, ease: [0.4, 0, 1, 1] } }}
         >
           <SystemThemeScope enabled={system} />
           <Suspense fallback={<FullPageSpinner />}>{outlet}</Suspense>
@@ -160,6 +164,7 @@ const router = createBrowserRouter([
         element: <PublicLayout />,
         children: [
           { index: true, element: <TenantHome /> },
+          { path: "rooms", element: <PublicRoomsPage /> },
           { path: "rooms/:roomId", element: <RoomPage /> },
           { path: "book", element: <BookPage /> },
           { path: "booking/:code", element: <ConfirmationPage /> },
@@ -179,6 +184,8 @@ const router = createBrowserRouter([
           { path: "bookings", element: <Suspense fallback={<FullPageSpinner />}><Bookings /></Suspense> },
           { path: "inbox", element: <Suspense fallback={<FullPageSpinner />}><Inbox /></Suspense> },
           { path: "rooms", element: <Suspense fallback={<FullPageSpinner />}><Rooms /></Suspense> },
+          { path: "rooms/new", element: <Suspense fallback={<FullPageSpinner />}><RoomDetail /></Suspense> },
+          { path: "rooms/:roomId", element: <Suspense fallback={<FullPageSpinner />}><RoomDetail /></Suspense> },
           { path: "pricing", element: <Suspense fallback={<FullPageSpinner />}><Pricing /></Suspense> },
           { path: "policies", element: <Suspense fallback={<FullPageSpinner />}><Policies /></Suspense> },
           { path: "payments", element: <Suspense fallback={<FullPageSpinner />}><Payments /></Suspense> },

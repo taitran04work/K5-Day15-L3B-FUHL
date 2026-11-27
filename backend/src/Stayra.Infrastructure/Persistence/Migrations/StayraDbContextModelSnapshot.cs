@@ -770,11 +770,32 @@ namespace Stayra.Infrastructure.Persistence.Migrations
                     b.Property<string>("Address")
                         .HasColumnType("text");
 
+                    b.Property<string>("AiModel")
+                        .HasColumnType("text");
+
+                    b.Property<string>("AnthropicApiKeyEnc")
+                        .HasColumnType("text");
+
+                    b.Property<string>("AnthropicKeyHint")
+                        .HasColumnType("text");
+
                     b.Property<bool>("AutoApproveCancellations")
                         .HasColumnType("boolean");
 
                     b.Property<bool>("AutoApproveChanges")
                         .HasColumnType("boolean");
+
+                    b.Property<string>("BgAboutUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BgContactUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BgPoliciesUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BgRoomsUrl")
+                        .HasColumnType("text");
 
                     b.Property<bool>("BotEnabled")
                         .HasColumnType("boolean");

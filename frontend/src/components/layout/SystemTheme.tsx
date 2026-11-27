@@ -1,9 +1,9 @@
 import { useContext, useEffect, useLayoutEffect, useState, type ReactNode } from "react"
 import { Moon, Sun } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Toaster } from "@/components/ui/sonner"
 import { ThemeContext, type ThemeMode } from "@/lib/theme"
-import { cn } from "@/lib/utils"
 
 const STORAGE_KEY = "stayra.theme"
 const DARK_MODE_QUERY = "(prefers-color-scheme: dark)"
@@ -53,27 +53,39 @@ export function SystemThemeScope({ enabled }: { enabled: boolean }) {
   return null
 }
 
-export function ThemeSwitch({ className, showLabel = false }: { className?: string; showLabel?: boolean }) {
+function useThemeToggle() {
   const { mode, setMode } = useContext(ThemeContext)
   const { t } = useTranslation()
   const next = mode === "dark" ? "light" : "dark"
-  const label = t(`theme.switchTo.${next}`)
-  const Icon = next === "dark" ? Moon : Sun
+  return { label: t(`theme.switchTo.${next}`), Icon: next === "dark" ? Moon : Sun, toggle: () => setMode(next) }
+}
 
+export function ThemeSwitch() {
+  const { label, Icon, toggle } = useThemeToggle()
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
-      onClick={() => setMode(next)}
-      className={cn(
-        "inline-flex h-9 shrink-0 items-center gap-2.5 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
-        showLabel ? "px-3" : "size-9 justify-center",
-        className,
-      )}
+      onClick={toggle}
+      className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-input bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
     >
       <Icon className="size-4 shrink-0" aria-hidden />
-      {showLabel && label}
     </button>
+  )
+}
+
+export function ThemeMenuItem() {
+  const { label, Icon, toggle } = useThemeToggle()
+  return (
+    <DropdownMenuItem
+      aria-label={label}
+      title={label}
+      textValue={label}
+      onSelect={toggle}
+      className="size-9 shrink-0 cursor-pointer justify-center rounded-md border border-input p-0 hover:bg-accent"
+    >
+      <Icon className="size-4" aria-hidden />
+    </DropdownMenuItem>
   )
 }

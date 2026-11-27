@@ -1,25 +1,26 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
 import { Link } from "react-router"
 import { useTranslation } from "react-i18next"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { ArrowRight, BedDouble, Clock, Mail, MapPin, Phone, Users, Wallet } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/common"
-import { LanguageSwitch } from "@/components/LanguageSwitch"
 import { Logo } from "@/components/Logo"
 import { GuestStepper, HourPicker, ModeToggle, NightRangePicker, defaultStay, type StayValue } from "@/components/booking/StayPicker"
 import { SlideDeck, type DeckSlide } from "@/components/landing/deck/SlideDeck"
 import { CountUp } from "@/components/motion/CountUp"
 import { Reveal, SplitWords, Stagger, StaggerItem } from "@/components/motion/Reveal"
-import { api } from "@/lib/api"
-import { money } from "@/lib/format"
+import { useLocalizedFormat } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { PublicHome, PublicTenant, Quote, Room } from "@/lib/types"
+import type { PublicHome, PublicTenant } from "@/lib/types"
 import { usePublic } from "./PublicLayout"
+import { PublicRoomCard } from "./PublicRoomCard"
+import { availableRoomsKey, searchAvailableRooms, stayQuery } from "./publicStay"
+import { homeBackdrops } from "@/lib/homeBackdrops"
 
 const ChatWidget = lazy(() => import("@/components/chat/ChatWidget").then((m) => ({ default: m.ChatWidget })))
 
-type Availability = { available: { room: Room; quote: Quote }[]; unavailable: { roomId: string; reason: string }[] }
+const ROOM_PREVIEW_COUNT = 4
 
 const goto = (id: string) => window.dispatchEvent(new CustomEvent("deck:goto", { detail: id }))
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v))
@@ -134,16 +135,10 @@ export default function TenantHome() {
   const { home, slug } = usePublic()
   const { t } = useTranslation()
   const progress = useRef(0)
-  const { tenant, rooms } = home
+  const { tenant } = home
   // search results are page-scoped: never carry them over to another property or visit
   useEffect(() => () => publishSearch(null), [slug])
 
-  const images = useMemo(() => {
-    const roomPhotos = rooms.flatMap((r) => [r.coverUrl, ...r.photos.map((p) => p.url)]).filter((u): u is string => !!u)
-    const unique = [...new Set([tenant.coverImageUrl, ...roomPhotos].filter((u): u is string => !!u))]
-    // one per slide, cycling if the property has few photos
-    return Array.from({ length: 5 }, (_, i) => unique.length ? unique[i % unique.length] : "")
-  }, [rooms, tenant.coverImageUrl])
 
   // Slides only depend on the data + language. Interactive parts (search, accordions) keep
   // their own state, so using them never rebuilds the deck.
@@ -158,6 +153,12 @@ export default function TenantHome() {
     return list
   }, [home, slug, t, tenant])
 
+  // one background per slide: the owner's choice (Website settings) first, otherwise the next unused room photo
+  const images = useMemo(() => {
+    const bg = homeBackdrops(home)
+    return slides.map((sl) => bg[sl.id]?.url ?? "")
+  }, [slides, home])
+
   return (
     <SlideDeck
       slides={slides}
@@ -170,7 +171,7 @@ export default function TenantHome() {
 
 /* ---------- shared search state between the hero form and the rooms slide ---------- */
 
-let lastSearch: { stay: StayValue; result: Availability } | null = null
+let lastSearch: { stay: StayValue; result: Awaited<ReturnType<typeof searchAvailableRooms>> } | null = null
 const searchListeners = new Set<() => void>()
 function publishSearch(v: typeof lastSearch) {
   lastSearch = v
@@ -192,12 +193,15 @@ function useLastSearch() {
 
 function HeroSlide({ home, slug }: { home: PublicHome; slug: string }) {
   const { t } = useTranslation()
+  const { money } = useLocalizedFormat()
+  const queryClient = useQueryClient()
   const { tenant, rooms } = home
   const hasHourly = rooms.some((r) => r.supportsHourly)
   const [search, setSearch] = useState<StayValue>(() => defaultStay("Nightly", tenant.openingTime))
   const availability = useMutation({
-    mutationFn: (s: StayValue) => api.post<Availability>(`/api/public/${slug}/availability`, s),
+    mutationFn: (stay: StayValue) => searchAvailableRooms(slug, stay),
     onSuccess: (result, stay) => {
+      queryClient.setQueryData(availableRoomsKey(slug, stay), result)
       publishSearch({ stay, result })
       goto("rooms")
     },
@@ -263,6 +267,7 @@ function HeroSlide({ home, slug }: { home: PublicHome; slug: string }) {
                 {availability.isPending && <Spinner />} {t("public.checkAvailability")}
               </Button>
             </div>
+            {availability.error && <p role="alert" className="mt-3 text-sm text-destructive">{t("common.errorDescription")}</p>}
           </form>
         </Reveal>
 
@@ -363,73 +368,46 @@ function RoomsSlide({ home, slug }: { home: PublicHome; slug: string }) {
   const shown = last ? home.rooms.filter((r) => quotes.has(r.id)) : home.rooms
 
   return (
-    <Frame scrim="full" className="items-start">
-      <div className="mx-auto w-full max-w-[1200px]">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <Eyebrow>{last ? t("public.availableRooms") : t("public.ourRooms")}</Eyebrow>
-            <H2>{t("public.deck.roomsTitle")}</H2>
-            {last && <p className="legible mt-3 text-base font-medium text-white/85">{t("public.availableCount", { count: shown.length })}</p>}
+    <div data-deck-scroll className="absolute inset-0 touch-pan-y overflow-y-auto overscroll-contain scrollbar-none">
+      <Frame scrim="full" className="items-start lg:items-center">
+        <div className="mx-auto w-full max-w-[1200px]">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <Eyebrow>{last ? t("public.availableRooms") : t("public.ourRooms")}</Eyebrow>
+              <H2>{t("public.deck.roomsTitle")}</H2>
+              {last && <p className="legible mt-3 text-base font-medium text-white/85">{t("public.availableCount", { count: shown.length })}</p>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {last && (
+                <button type="button" onClick={() => publishSearch(null)} className="rounded-full border border-white/30 bg-black/45 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-black/60">
+                  {t("public.showAllRooms")}
+                </button>
+              )}
+              {shown.length > ROOM_PREVIEW_COUNT && (
+                <Button asChild className="h-10 rounded-full border border-white/25 px-5">
+                  <Link to={`/h/${slug}/rooms${stayQuery(last?.stay)}`}>{t("public.viewMoreRooms")} <ArrowRight aria-hidden /></Link>
+                </Button>
+              )}
+            </div>
           </div>
-          {last && (
-            <button type="button" onClick={() => publishSearch(null)} className="rounded-full border border-white/30 bg-black/45 px-4 py-2 text-sm font-semibold text-white transition hover:bg-black/60">
-              {t("public.showAllRooms")}
-            </button>
+
+          {shown.length === 0 ? (
+            <Glass className="mt-8 p-8 text-center">
+              <p className="text-lg font-semibold text-white">{t(last ? "public.noRoomsTitle" : "public.noListedRoomsTitle")}</p>
+              <p className="mt-2 text-sm text-white/75">{t(last ? "public.noRoomsDescription" : "public.noListedRoomsDescription")}</p>
+            </Glass>
+          ) : (
+            <Stagger key={last ? "searched" : "all"} delay={0.16} stagger={0.055} className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {shown.slice(0, ROOM_PREVIEW_COUNT).map((room) => (
+                <StaggerItem key={room.id} className="min-w-0">
+                  <PublicRoomCard room={room} slug={slug} quote={quotes.get(room.id)} stay={last?.stay} className="h-[clamp(19rem,46dvh,25rem)]" />
+                </StaggerItem>
+              ))}
+            </Stagger>
           )}
         </div>
-
-        {shown.length === 0 ? (
-          <Glass className="mt-10 p-8 text-center">
-            <p className="text-lg font-semibold text-white">{t("public.noRoomsTitle")}</p>
-            <p className="mt-2 text-sm text-white/75">{t("public.noRoomsDescription")}</p>
-          </Glass>
-        ) : (
-          <Stagger key={last ? "searched" : "all"} delay={0.25} stagger={0.08} className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {shown.map((r) => (
-              <StaggerItem key={r.id}>
-                <RoomCard room={r} slug={slug} quote={quotes.get(r.id)} search={last?.stay} />
-              </StaggerItem>
-            ))}
-          </Stagger>
-        )}
-      </div>
-    </Frame>
-  )
-}
-
-function RoomCard({ room, slug, quote, search }: { room: Room; slug: string; quote?: Quote; search?: StayValue }) {
-  const { t } = useTranslation()
-  const params = search ? `?mode=${search.mode}&start=${search.start}&end=${search.end}&guests=${search.guests}` : ""
-  const [failed, setFailed] = useState(false)
-  const specs = [room.beds, t("room.upToGuests", { count: room.maxGuests }), room.areaM2 ? `${room.areaM2} m²` : null].filter(Boolean).slice(0, 3)
-  const price = quote
-    ? { value: money(quote.total), unit: t("room.totalFor", { units: quote.mode === "Nightly" ? t("booking.nightsCount", { count: quote.units }) : t("booking.hoursCount", { count: quote.units }) }) }
-    : room.supportsNightly
-      ? { value: money(room.baseNightlyPrice), unit: t("room.perNight") }
-      : { value: money(room.baseHourlyPrice), unit: t("room.perHour") }
-
-  return (
-    <Link
-      to={`/h/${slug}/rooms/${room.id}${params}`}
-      className="group relative flex h-[360px] flex-col justify-end overflow-hidden rounded-[22px] border border-white/12 bg-[#0b0f16] shadow-[0_30px_60px_-30px_#000] transition-transform duration-500 hover:-translate-y-1.5"
-    >
-      {room.coverUrl && !failed && (
-        <img src={room.coverUrl} alt={room.name} loading="lazy" onError={() => setFailed(true)} className="absolute inset-0 size-full object-cover transition-transform duration-[1.2s] group-hover:scale-110" />
-      )}
-      <span className="absolute inset-0 bg-[linear-gradient(180deg,rgba(6,8,12,0)_30%,rgba(6,8,12,0.55)_60%,rgba(6,8,12,0.95)_100%)]" />
-      <div className="relative p-5">
-        <h3 className="text-xl font-semibold text-white">{room.name}</h3>
-        <p className="mt-1 text-sm text-white/75">{specs.join(" · ")}</p>
-        <div className="mt-4 flex items-end justify-between gap-3">
-          <p>
-            <span className="font-display text-2xl font-bold text-white">{price.value}</span> <span className="text-sm text-white/70">{price.unit}</span>
-          </p>
-          <span className="flex size-10 items-center justify-center rounded-full bg-brand text-brand-foreground transition-transform duration-300 group-hover:translate-x-1">
-            <ArrowRight className="size-4" />
-          </span>
-        </div>
-      </div>
-    </Link>
+      </Frame>
+    </div>
   )
 }
 
@@ -620,9 +598,6 @@ function TenantHeader({ tenant, slug, go }: { tenant: PublicTenant; slug: string
           </Link>
         </nav>
         <div className="flex items-center gap-2">
-          <div className="hidden rounded-full bg-white/90 text-[#14201b] sm:block">
-            <LanguageSwitch />
-          </div>
           {tenant.botEnabled && (
             <Suspense fallback={null}>
               <ChatWidget slug={slug} tenant={tenant} />

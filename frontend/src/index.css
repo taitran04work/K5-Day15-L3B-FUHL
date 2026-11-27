@@ -255,6 +255,50 @@
   color: var(--editorial-ink);
 }
 
+.guest-storefront {
+  color-scheme: dark;
+  --background: #0b0f16;
+  --canvas: #101620;
+  --foreground: #fbf6ec;
+  --card: #141c27;
+  --card-foreground: var(--foreground);
+  --popover: #17212d;
+  --popover-foreground: var(--foreground);
+  --muted: #202934;
+  --muted-foreground: #c2c8ce;
+  --subtle: #a5aeb8;
+  --secondary: #202934;
+  --secondary-foreground: var(--foreground);
+  --accent: #273242;
+  --accent-foreground: var(--foreground);
+  --border: #36414e;
+  --input: #465362;
+  --ring: color-mix(in oklab, var(--brand) 40%, white);
+  --brand-soft: color-mix(in oklab, var(--brand) 22%, var(--card));
+  --destructive: #ffaaa2;
+  --warning: #f6c17e;
+  --success: #91ddb0;
+  --status-positive: var(--success);
+  --status-positive-soft: color-mix(in oklab, var(--success) 14%, var(--card));
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.guest-storefront :focus-visible {
+  outline-color: var(--ring);
+}
+
+.guest-storefront [data-slot="button"][data-variant="default"] {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 22%);
+}
+
+.guest-panel {
+  border: 1px solid var(--border);
+  border-radius: 1.4rem;
+  background-color: color-mix(in oklab, var(--card) 94%, transparent);
+  box-shadow: 0 24px 64px -40px rgb(0 0 0 / 80%);
+}
+
 .legible {
   text-shadow:
     0 1px 2px rgba(0, 0, 0, 0.5),

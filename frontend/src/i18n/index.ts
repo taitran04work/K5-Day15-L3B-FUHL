@@ -1,8 +1,9 @@
-import i18n from "i18next"
+import i18n, { createInstance, type InitOptions } from "i18next"
 import LanguageDetector from "i18next-browser-languagedetector"
 import { initReactI18next } from "react-i18next"
 import en from "./en"
 import vi from "./vi"
+import type { LanguageCode } from "./languages"
 
 type Tree = { [k: string]: string | Tree | unknown[] }
 
@@ -20,17 +21,27 @@ function withPlurals(tree: Tree, reference: Tree): Tree {
   return out
 }
 
+const translationOptions = {
+  resources: { en: { translation: en }, vi: { translation: withPlurals(vi as Tree, en as Tree) } },
+  fallbackLng: "en",
+  supportedLngs: ["en", "vi"],
+  nonExplicitSupportedLngs: true,
+  interpolation: { escapeValue: false },
+  returnNull: false,
+} satisfies InitOptions
+
+export function createGuestI18n(language: LanguageCode) {
+  const instance = createInstance()
+  void instance.init({ ...translationOptions, lng: language, initAsync: false })
+  return instance
+}
+
 void i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
-    resources: { en: { translation: en }, vi: { translation: withPlurals(vi as Tree, en as Tree) } },
-    fallbackLng: "en",
-    supportedLngs: ["en", "vi"],
-    nonExplicitSupportedLngs: true,
-    interpolation: { escapeValue: false },
+    ...translationOptions,
     detection: { order: ["localStorage", "navigator"], lookupLocalStorage: "stayra.lang", caches: ["localStorage"] },
-    returnNull: false,
   })
 
 i18n.on("languageChanged", (lng) => {

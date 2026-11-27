@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Link, useNavigate } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useQuery } from "@tanstack/react-query"
 import { BedDouble, Plus, Upload } from "lucide-react"
@@ -6,7 +7,6 @@ import { Button } from "@/components/ui/button"
 import { Page } from "@/components/layout/AppShell"
 import { EmptyState, ErrorState, PageHeader, RowsSkeleton } from "@/components/common"
 import { PhotoTile } from "@/components/booking/BookingParts"
-import { RoomEditor } from "@/components/app/RoomEditor"
 import { ImportDialog } from "@/components/app/ImportDialog"
 import { api } from "@/lib/api"
 import { money } from "@/lib/format"
@@ -15,15 +15,9 @@ import type { Room } from "@/lib/types"
 
 export default function Rooms() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const rooms = useQuery({ queryKey: ["rooms"], queryFn: () => api.get<Room[]>("/api/app/rooms") })
-  const [editing, setEditing] = useState<Room | null>(null)
-  const [editorOpen, setEditorOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
-
-  const open = (r: Room | null) => {
-    setEditing(r)
-    setEditorOpen(true)
-  }
 
   return (
     <Page>
@@ -35,8 +29,10 @@ export default function Rooms() {
             <Button variant="outline" onClick={() => setImportOpen(true)}>
               <Upload /> {t("rooms.import")}
             </Button>
-            <Button onClick={() => open(null)}>
-              <Plus /> {t("rooms.add")}
+            <Button asChild>
+              <Link to="/app/rooms/new">
+                <Plus /> {t("rooms.add")}
+              </Link>
             </Button>
           </>
         }
@@ -55,8 +51,10 @@ export default function Rooms() {
               <Button variant="outline" onClick={() => setImportOpen(true)}>
                 <Upload /> {t("rooms.import")}
               </Button>
-              <Button onClick={() => open(null)}>
-                <Plus /> {t("rooms.add")}
+              <Button asChild>
+                <Link to="/app/rooms/new">
+                  <Plus /> {t("rooms.add")}
+                </Link>
               </Button>
             </div>
           }
@@ -76,7 +74,13 @@ export default function Rooms() {
             </thead>
             <tbody className="divide-y">
               {rooms.data.map((r) => (
-                <tr key={r.id} tabIndex={0} onClick={() => open(r)} onKeyDown={(e) => e.key === "Enter" && open(r)} className="cursor-pointer outline-none hover:bg-muted/50 focus-visible:bg-muted/60">
+                <tr
+                  key={r.id}
+                  tabIndex={0}
+                  onClick={() => navigate(`/app/rooms/${r.id}`)}
+                  onKeyDown={(e) => e.key === "Enter" && navigate(`/app/rooms/${r.id}`)}
+                  className="cursor-pointer outline-none hover:bg-muted/50 focus-visible:bg-muted/60"
+                >
                   <td data-row-title className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <PhotoTile url={r.coverUrl} alt={r.name} className="h-10 w-14 shrink-0 rounded-md" />
@@ -107,7 +111,6 @@ export default function Rooms() {
           </table>
         </div>
       )}
-      <RoomEditor room={editing} open={editorOpen} onOpenChange={setEditorOpen} />
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
     </Page>
   )

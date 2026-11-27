@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { Link, NavLink, Outlet, useLocation } from "react-router"
+import { motion, useReducedMotion } from "motion/react"
 import { useTranslation } from "react-i18next"
 import { useQuery } from "@tanstack/react-query"
 import {
@@ -23,7 +24,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { LanguageSwitch } from "@/components/LanguageSwitch"
-import { ThemeSwitch } from "@/components/layout/SystemTheme"
+import { ThemeMenuItem } from "@/components/layout/SystemTheme"
 import { useAuth } from "@/lib/auth"
 import { api } from "@/lib/api"
 import { initials } from "@/lib/format"
@@ -84,7 +85,6 @@ export function Sidebar({ groups, header, onNavigate }: { groups: { title?: stri
         ))}
       </nav>
       <div className="border-t border-(--sidebar-divider) px-3 py-2.5">
-        <ThemeSwitch showLabel className="mb-1 w-full border-transparent bg-transparent text-(--sidebar-muted) hover:bg-(--sidebar-hover) hover:text-(--sidebar-text)" />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex w-full items-center gap-2.5 rounded-md p-2 text-left hover:bg-(--sidebar-hover)">
@@ -97,8 +97,9 @@ export function Sidebar({ groups, header, onNavigate }: { groups: { title?: stri
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" side="top" className="w-56">
             <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("nav.language")}</DropdownMenuLabel>
-            <div className="px-2 pb-2">
-              <LanguageSwitch className="w-full" />
+            <div className="flex items-center gap-2 px-2 pb-2">
+              <LanguageSwitch className="h-9 min-w-0 flex-1" />
+              <ThemeMenuItem />
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={logout}>
@@ -115,6 +116,7 @@ function Shell({ groups, header, children }: { groups: { title?: string; items: 
   const [open, setOpen] = useState(false)
   const { t } = useTranslation()
   const { pathname } = useLocation()
+  const reduce = useReducedMotion()
   const mainRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
@@ -132,7 +134,6 @@ function Shell({ groups, header, children }: { groups: { title?: string; items: 
         </Button>
         <Logo tone="auto" className="h-11" />
         <div className="min-w-0 flex-1">{header}</div>
-        <ThemeSwitch />
       </div>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left" className="system-sidebar w-72 max-w-[calc(100%-2rem)] p-0 [&>button]:bg-(--sidebar-hover) [&>button]:text-(--sidebar-text)">
@@ -141,7 +142,14 @@ function Shell({ groups, header, children }: { groups: { title?: string; items: 
         </SheetContent>
       </Sheet>
       <main ref={mainRef} className="min-w-0 flex-1 lg:h-dvh lg:overflow-y-auto">
-        {children}
+        <motion.div
+          key={pathname}
+          initial={reduce ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: reduce ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+        >
+          {children}
+        </motion.div>
       </main>
     </div>
   )
