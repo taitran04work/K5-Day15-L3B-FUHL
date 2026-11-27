@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Stayra.Api.Infrastructure;
 using Stayra.Application.Common;
 using Stayra.Domain;
+using Stayra.Infrastructure.Messaging;
 using Stayra.Infrastructure.Persistence;
 
 namespace Stayra.Api.Controllers;
@@ -42,7 +43,13 @@ public class CreateTenantValidator : AbstractValidator<CreateTenantRequest>
 [ApiController]
 [Route("api/admin")]
 [Authorize(Policy = "Admin")]
-public class AdminController(StayraDbContext db, TimeProvider clock, IConfiguration config, ILogger<AdminController> log) : ControllerBase
+public class AdminController(
+    StayraDbContext db,
+    TimeProvider clock,
+    IConfiguration config,
+    DeplaoClient deplao,
+    Microsoft.Extensions.Options.IOptions<DeplaoOptions> deplaoOptions,
+    ILogger<AdminController> log) : ControllerBase
 {
     [HttpGet("tenants")]
     public async Task<List<AdminTenantDto>> Tenants()
@@ -93,6 +100,8 @@ public class AdminController(StayraDbContext db, TimeProvider clock, IConfigurat
         db.AuditLogs.Add(new AuditLog { TenantId = tenant.Id, Actor = $"admin:{User.EmailOf()}", Action = "tenant.created", EntityType = nameof(Tenant), EntityId = tenant.Id });
         await db.SaveChangesAsync();
 
+        var apiBase = (config["App:PublicApiUrl"] ?? "http://api:8080").TrimEnd('/');
+        await deplao.EnsureProvisionedAsync(tenant, db, $"{apiBase}/api/channels/deplao/{tenant.Slug}/webhook", HttpContext.RequestAborted);
         log.LogInformation("Tenant {Tenant} created with owner {Email}", tenant.Name, email);
         return new CreateTenantResponse(new AdminTenantDto(tenant.Id, tenant.Slug, tenant.Name, tenant.Status, email, tenant.Address, 0, 0, 0, 0, 0, tenant.CreatedAt), email);
     }
@@ -117,6 +126,8 @@ public class AdminController(StayraDbContext db, TimeProvider clock, IConfigurat
                 Date = g.Key,
                 GuestMessages = g.Count(m => m.Role == MessageRole.Guest),
                 BotMessages = g.Count(m => m.Role == MessageRole.Bot),
+                InputTokens = g.Sum(m => (long)m.InputTokens),
+                OutputTokens = g.Sum(m => (long)m.OutputTokens),
                 Tokens = g.Sum(m => (long)m.InputTokens + m.OutputTokens),
             }).OrderBy(x => x.Date).ToListAsync();
         return new
@@ -125,9 +136,59 @@ public class AdminController(StayraDbContext db, TimeProvider clock, IConfigurat
             activeTenants = await db.Tenants.CountAsync(t => t.Status == TenantStatus.Active),
             bookings30 = await db.Bookings.CountAsync(b => b.CreatedAt >= since),
             conversations30 = await db.Conversations.CountAsync(c => c.CreatedAt >= since),
+            inputTokens30 = days.Sum(d => d.InputTokens),
+            outputTokens30 = days.Sum(d => d.OutputTokens),
             tokens30 = days.Sum(d => d.Tokens),
             days,
         };
+    }
+
+    [HttpGet("channels")]
+    public async Task<object> Channels()
+    {
+        var opts = deplaoOptions.Value;
+        // Resolve the platform API key without triggering auto-provisioning — GET should have no side effects.
+        // If a platform-level key is configured in options, use it; otherwise fall back to the first tenant's key.
+        var firstTenant = await db.Tenants.OrderBy(t => t.CreatedAt).FirstOrDefaultAsync();
+        var apiKey = firstTenant != null ? deplao.ResolveApiKey(firstTenant) : (string.IsNullOrWhiteSpace(opts.ApiKey) ? null : opts.ApiKey);
+        var hasKey = !string.IsNullOrWhiteSpace(apiKey) || !string.IsNullOrWhiteSpace(opts.WebPassword);
+        var accounts = new List<DeplaoAccount>();
+        string? error = null;
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            var res = await deplao.GetAccountsAsync(opts.DefaultBaseUrl, apiKey, HttpContext.RequestAborted);
+            accounts = res.Accounts;
+            error = res.Error;
+        }
+        var connections = await (from c in db.ChannelConnections.IgnoreQueryFilters()
+                                 join t in db.Tenants on c.TenantId equals t.Id
+                                 orderby c.CreatedAt descending
+                                 select new { c.Id, c.TenantId, tenantName = t.Name, tenantSlug = t.Slug, channel = c.Channel.ToString(), c.AccountId, c.AccountName, c.IsEnabled })
+            .ToListAsync();
+        var apiBase = (config["App:PublicApiUrl"] ?? "http://api:8080").TrimEnd('/');
+        return new
+        {
+            gatewayUrl = deplao.NormalizeBaseUrl(opts.DefaultBaseUrl),
+            configured = hasKey,
+            webhookUrl = $"{apiBase}/api/channels/deplao/webhook",
+            accounts,
+            connections,
+            error,
+        };
+    }
+
+    [HttpPost("channels/register-webhook")]
+    public async Task<object> RegisterGlobalWebhook()
+    {
+        var firstTenant = await db.Tenants.OrderBy(t => t.CreatedAt).FirstOrDefaultAsync();
+        if (firstTenant == null)
+            throw AppException.BadRequest("no_tenants", "Create a tenant first.");
+        var apiBase = (config["App:PublicApiUrl"] ?? "http://api:8080").TrimEnd('/');
+        var webhookUrl = $"{apiBase}/api/channels/deplao/webhook";
+        await deplao.EnsureProvisionedAsync(firstTenant, db, webhookUrl, HttpContext.RequestAborted);
+        var secret = deplao.ResolveWebhookSecret(firstTenant) ?? "whsec_" + Guid.NewGuid().ToString("N");
+        var reg = await deplao.RegisterOrUpdateWebhookAsync(firstTenant, webhookUrl, secret, HttpContext.RequestAborted);
+        return new { ok = reg.Ok, webhookId = reg.WebhookId, message = reg.Message };
     }
 }
 

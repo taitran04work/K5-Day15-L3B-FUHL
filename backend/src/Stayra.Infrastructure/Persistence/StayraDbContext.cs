@@ -27,6 +27,7 @@ public class StayraDbContext(DbContextOptions<StayraDbContext> options, ITenantC
     public DbSet<FaqItem> FaqItems => Set<FaqItem>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
+    public DbSet<ChannelConnection> ChannelConnections => Set<ChannelConnection>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
@@ -116,7 +117,14 @@ public class StayraDbContext(DbContextOptions<StayraDbContext> options, ITenantC
         b.Entity<Message>(e =>
         {
             e.HasIndex(x => new { x.ConversationId, x.CreatedAt });
+            e.HasIndex(x => new { x.ConversationId, x.ExternalMessageId });
             e.Property(x => x.CardsJson).HasColumnType("jsonb");
+        });
+
+        b.Entity<ChannelConnection>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Channel, x.AccountId }).IsUnique();
+            e.HasIndex(x => new { x.Channel, x.AccountId });
         });
 
         b.Entity<AuditLog>(e => e.HasIndex(x => new { x.TenantId, x.EntityId }));

@@ -1,0 +1,655 @@
+import { ipcMain, BrowserWindow, safeStorage } from 'electron';
+import * as http from 'http';
+import * as https from 'https';
+import * as path from 'path';
+import WorkspaceManager, { Workspace } from '../../../src/utils/app/WorkspaceManager';
+import AppModeManager from '../../../src/utils/app/AppModeManager';
+import DatabaseService from '../../../src/services/database/DatabaseService';
+import FileStorageService from '../../../src/services/file/FileStorageService';
+import HttpConnectionManager from '../../../src/services/http/HttpConnectionManager';
+import HttpRelayService from '../../../src/services/http/HttpRelayService';
+import ConnectionManager from '../../../src/utils/connection/ConnectionManager';
+import EventBroadcaster from '../../../src/services/event/EventBroadcaster';
+import Logger from '../../../src/utils/Logger';
+import { credentialsChanged, isWrongPasswordLogin, normalizeBossUrl } from '../../../src/shared/employee/employeeConnection';
+import { runInRuntimeScope } from '../../../src/services/database/dbScope';
+import { tr } from '../../../src/shared/i18n';
+
+/**
+ * Pauses DB sync to Cloudflare around operations that change / delete the workspace's DB file (dbsync releases the file first, then checks
+ * the DB again). If the module cannot be loaded (or sync is off) → run directly.
+ */
+function withCloudDbPaused<T>(reason: string, fn: () => Promise<T>): Promise<T> {
+    let cloudDb: { pauseFor<R>(reason: string, fn: () => Promise<R> | R): Promise<R> } | null = null;
+    try {
+        cloudDb = (require('../../../src/services/cloudflare/dbsync') as typeof import('../../../src/services/cloudflare/dbsync')).cloudDb;
+    } catch {
+        cloudDb = null;
+    }
+    return cloudDb ? cloudDb.pauseFor(reason, fn) : fn();
+}
+
+/** employee_id from the JWT payload (not verified: Boss already verified it when issuing the token). */
+function employeeIdFromToken(token: string): string | null {
+    try {
+        const payload = JSON.parse(Buffer.from(String(token).split('.')[1] || '', 'base64').toString());
+        return payload?.employee_id ? String(payload.employee_id) : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * HTTP/HTTPS POST helper for remote login requests.
+ * Automatically uses https module for https:// URLs.
+ * Adds bypass-tunnel-reminder header for loca.lt tunnels.
+ */
+function httpPost(url: string, body: any, timeoutMs = 15000): Promise<any> {
+    return new Promise((resolve, reject) => {
+        let parsed: URL;
+        try {
+            parsed = new URL(url);
+        } catch {
+            reject(new Error(tr('URL không hợp lệ')));
+            return;
+        }
+        const data = JSON.stringify(body);
+        const isHttps = parsed.protocol === 'https:';
+        const transport = isHttps ? https : http;
+        const isTunnel = parsed.hostname.includes('loca.lt') ||
+                         parsed.hostname.includes('localtunnel') ||
+                         parsed.hostname.includes('ngrok') ||
+                         parsed.hostname.includes('serveo');
+
+        const req = (transport as typeof https).request({
+            hostname: parsed.hostname,
+            port: parsed.port || (isHttps ? '443' : '80'),
+            path: parsed.pathname + (parsed.search || ''),
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(data),
+                ...(isTunnel ? { 'bypass-tunnel-reminder': 'true' } : {}),
+            },
+            timeout: timeoutMs,
+        }, (res) => {
+            let responseBody = '';
+            res.on('data', (chunk: Buffer) => { responseBody += chunk.toString(); });
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(responseBody));
+                } catch {
+                    // HTML interstitial or non-JSON response
+                    const preview = responseBody.slice(0, 200);
+                    reject(new Error(tr('Phản hồi không hợp lệ từ boss server: {{preview}}', { preview })));
+                }
+            });
+        });
+
+        req.on('error', (err: any) => {
+            if (err.code === 'ECONNREFUSED') {
+                reject(new Error(tr('Không thể kết nối - kiểm tra lại IP và Port, đảm bảo boss đã bật Relay Server')));
+            } else if (err.code === 'ETIMEDOUT' || err.code === 'ESOCKETTIMEDOUT') {
+                reject(new Error(tr('Hết thời gian kết nối - kiểm tra lại mạng')));
+            } else {
+                reject(new Error(tr('Lỗi kết nối: {{message}}', { message: err.message })));
+            }
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error(tr('Hết thời gian kết nối ({{v1}}s) - kiểm tra lại địa chỉ Boss', { v1: timeoutMs / 1000 })));
+        });
+
+        req.write(data);
+        req.end();
+    });
+}
+
+/** Employee sign-in to Boss (POST /api/auth/login), shared by loginRemote and loginRemoteSaved. */
+async function loginToBoss(bossUrl: string, username: string, password: string): Promise<any> {
+    try {
+        // Normalize URL
+        let url = String(bossUrl || '').trim();
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            url = `http://${url}`;
+        }
+        // Remove trailing slash
+        url = url.replace(/\/+$/, '');
+
+        Logger.log(`[workspaceIpc] loginRemote → ${url}/api/auth/login (user: ${username})`);
+
+        return await httpPost(`${url}/api/auth/login`, { username, password });
+    } catch (err: any) {
+        Logger.error(`[workspaceIpc] loginRemote error: ${err.message}`);
+        return { success: false, error: err.message };
+    }
+}
+
+// ─── Saved employee passwords (safeStorage) ────────────────────────
+
+/** Encrypted with the OS key (Windows DPAPI / macOS Keychain / Linux keyring); if that is not possible, nothing is saved. */
+function canEncryptPasswords(): boolean {
+    try {
+        if (!safeStorage.isEncryptionAvailable()) return false;
+        // Linux has no keyring → Electron uses a fixed key ('basic_text'): treat it as not encryptable
+        if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') return false;
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/** Boss stores usernames in lowercase (EmployeeService) → matching ignores case. */
+function normalizeUsername(value: unknown): string {
+    return String(value ?? '').toLowerCase().trim();
+}
+
+function sameDbFile(a: string, b: string): boolean {
+    const ra = path.resolve(a);
+    const rb = path.resolve(b);
+    return process.platform === 'win32' ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+}
+
+/**
+ * Sets the main process to the workspace state (dbScope.ts): the main DB + media = the local workspace running in the background
+ * (getRuntimeWorkspace); when the UI opens a remote workspace (employee) → opens its cached DB for UI commands.
+ * Switching to / leaving a remote workspace does NOT change the main DB: Zalo, Telegram, Facebook, workflows, API… of the local workspace
+ * keep running and write to the right place. Returns true when the local workspace running in the background changes (switching between two local workspaces).
+ */
+async function syncWorkspaceDatabases(): Promise<boolean> {
+    const wsm = WorkspaceManager.getInstance();
+    const db = DatabaseService.getInstance();
+    const runtimeWs = wsm.getRuntimeWorkspace();
+    const uiWs = wsm.getUiActiveWorkspace();
+    if (uiWs?.type !== 'remote') db.closeUiWorkspaceDb();
+
+    const runtimeDbPath = wsm.resolveDbPath(runtimeWs?.dbPath || 'deplao-tool.db');
+    const runtimeChanged = !sameDbFile(runInRuntimeScope(() => db.getDbPath()), runtimeDbPath);
+    if (runtimeChanged) {
+        await db.switchToWorkspaceDb(runtimeDbPath);
+        // Media of the new local workspace
+        FileStorageService.resetBaseDir();
+    }
+    if (uiWs?.type === 'remote') {
+        db.openUiWorkspaceDb({
+            workspaceId: uiWs.id,
+            dbPath: wsm.resolveDbPath(uiWs.dbPath || `workspace-${uiWs.id}/deplao-tool.db`),
+            mediaDir: wsm.resolveMediaPath(uiWs),
+        });
+    }
+    return runtimeChanged;
+}
+
+/**
+ * registerWorkspaceIpc - IPC handlers for Workspace CRUD + switching.
+ * 8 channels total.
+ */
+export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
+    const wm = () => WorkspaceManager.getInstance();
+
+    // ─── List ────────────────────────────────────────────────────────
+
+    ipcMain.handle('workspace:list', async () => {
+        try {
+            const workspaces = wm().listWorkspaces();
+            return { success: true, workspaces };
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] list error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Get Active ──────────────────────────────────────────────────
+
+    ipcMain.handle('workspace:getActive', async () => {
+        try {
+            // Workspace open in the UI (not the local workspace running in the background)
+            const workspace = wm().getUiActiveWorkspace();
+            return { success: true, workspace };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Create ──────────────────────────────────────────────────────
+
+    ipcMain.handle('workspace:create', async (_e, params: {
+        name: string;
+        type: 'local' | 'remote';
+        icon?: string;
+        bossUrl?: string;
+        token?: string;
+        employeeId?: string;
+        employeeName?: string;
+        autoConnect?: boolean;
+        relayPort?: number;
+    }) => {
+        try {
+            return wm().createWorkspace(params);
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] create error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Update ──────────────────────────────────────────────────────
+
+    ipcMain.handle('workspace:update', async (_e, { id, updates }: {
+        id: string;
+        updates: Partial<Omit<Workspace, 'id' | 'createdAt'>>;
+    }) => {
+        try {
+            const before = wm().getWorkspaceById(id);
+            const prevCreds = before ? { bossUrl: before.bossUrl, token: before.token } : null;
+            const result = wm().updateWorkspace(id, updates);
+            // Boss URL / token of a remote workspace changed → main tells the renderer (employee:credentials)
+            // and reconnects with the new config if a connection is held: the REST client never drifts from main.
+            if (result.success && before?.type === 'remote' && updates && ('bossUrl' in updates || 'token' in updates)) {
+                const after = wm().getWorkspaceById(id);
+                if (after && credentialsChanged(prevCreds, { bossUrl: after.bossUrl, token: after.token })) {
+                    HttpConnectionManager.getInstance().onCredentialsChanged(id);
+                }
+            }
+            return result;
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] update error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Delete ──────────────────────────────────────────────────────
+
+    ipcMain.handle('workspace:delete', async (_e, { id }: { id: string }) => runInRuntimeScope(() => withCloudDbPaused('workspace-delete', async () => {
+        try {
+            // Record whether this is the currently active workspace BEFORE deleting
+            const wasActive = wm().getActiveWorkspaceId() === id;
+            const wasRemote = wm().getWorkspaceById(id)?.type === 'remote';
+            // Local workspace running in the background (main DB): switch the main DB to the other local workspace before deleting the folder
+            // (Windows locks the DB file that is open)
+            const wasRuntime = !wasRemote && wm().getRuntimeWorkspace()?.id === id;
+            const db = DatabaseService.getInstance();
+            if (wasActive && wasRemote) db.closeUiWorkspaceDb();
+            if (wasRuntime) {
+                const fallback = wm().listWorkspaces().find(w => w.type !== 'remote' && w.id !== id);
+                if (fallback) {
+                    await db.switchToWorkspaceDb(wm().resolveDbPath(fallback.dbPath || 'deplao-tool.db'));
+                    FileStorageService.resetBaseDir();
+                }
+            }
+
+            const result = wm().deleteWorkspace(id);
+            // Cannot delete (e.g. the default workspace): reopen the DB with its previous state
+            if (!result.success && (wasRuntime || (wasActive && wasRemote))) await syncWorkspaceDatabases();
+
+            // Deleting a remote workspace = fully disconnects from Boss (heartbeat + Socket.IO + retry schedule)
+            if (result.success && wasRemote) {
+                try { HttpConnectionManager.getInstance().disconnect(id); } catch { /* ignore */ }
+            }
+
+            if (result.success && (wasActive || wasRuntime)) {
+                // WorkspaceManager already updated activeWorkspaceId to the first remaining.
+                // Now we need to: switch DB + notify renderer (same as workspace:switch).
+                const runtimeChanged = await syncWorkspaceDatabases();
+                if (runtimeChanged || wasRuntime) {
+                    try { require('../../../src/services/workflow/WorkflowEngineService').default.getInstance().reloadAll(); } catch { /* ignore */ }
+                    try { void require('../../../src/services/plugins/PluginsPlatform').default.getInstance().onWorkspaceChanged(); } catch { /* ignore */ }
+                }
+            }
+
+            if (result.success && wasActive) {
+                const newActiveWs = wm().getUiActiveWorkspace();
+                if (newActiveWs) {
+                    AppModeManager.getInstance().clearOverride();
+
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('workspace:switched', {
+                            workspace: newActiveWs,
+                        });
+                    }
+                    Logger.log(`[workspaceIpc] Deleted active workspace → switched to "${newActiveWs.name}"`);
+                }
+            }
+
+            return result;
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] delete error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    })));
+
+    // ─── Switch ──────────────────────────────────────────────────────
+
+    // Runs outside the UI scope (runInRuntimeScope): this command changes that scope itself, the rest (hooks, plugins, sync
+    // cookies) belongs to the local workspace running in the background.
+    ipcMain.handle('workspace:switch', async (_e, { id }: { id: string }) => runInRuntimeScope(() => withCloudDbPaused('workspace-switch', async () => {
+        const prevWorkspaceId = wm().getActiveWorkspaceId();
+        try {
+            const result = wm().switchWorkspace(id);
+            if (result.success && result.workspace) {
+                // Clear AppModeManager override so it derives mode from workspace
+                AppModeManager.getInstance().clearOverride();
+
+                // Flush pending DB writes before switching
+                DatabaseService.getInstance().forceFlush();
+
+                // Clear event hooks to prevent accumulation across switches
+                EventBroadcaster.clearBeforeSendHooks();
+
+                // DB / media: the local workspace running in the background stays the same when switching to / leaving an employee (remote) workspace;
+                // when switching between two local workspaces, the main DB + media switch with it
+                const prevMainDbPath = runInRuntimeScope(() => DatabaseService.getInstance().getDbPath());
+                const runtimeChanged = await syncWorkspaceDatabases();
+
+                // Re-hook HttpRelayService into EventBroadcaster (clearBeforeSendHooks removed them)
+                try {
+                    const relay = HttpRelayService.getInstance();
+                    if (relay.getStatus().running) {
+                        relay.hookEventBroadcaster();
+                    }
+                } catch {}
+
+                // Public API v1: re-register the event hooks (clearBeforeSendHooks has been removed)
+                try {
+                    require('../../../src/services/api/ApiPlatform').default.getInstance().rehookEvents();
+                } catch {}
+
+                // Workflows: re-register the trigger hooks (messages, payments…). Without this step, workflows stop running until the app is reopened
+                try {
+                    require('../../../src/services/workflow/WorkflowEngineService').default.getInstance().rehookEvents();
+                    // The local workspace running in the background changed → workflows + schedules of the new workspace
+                    if (runtimeChanged) require('../../../src/services/workflow/WorkflowEngineService').default.getInstance().reloadAll();
+                } catch (err: any) {
+                    Logger.error(`[workspaceIpc] Workflow rehookEvents failed: ${err?.message || err}`);
+                }
+
+                // Plugins: the local workspace running in the background changed → stop the old workspace's plugins, run the enabled plugins of the new workspace
+                // (background). Switching to / leaving an employee workspace: plugins keep running, only the UI is told to reload.
+                try {
+                    const plugins = require('../../../src/services/plugins/PluginsPlatform').default.getInstance();
+                    if (runtimeChanged) void plugins.onWorkspaceChanged();
+                    else plugins.notifyUiChanged();
+                } catch {}
+
+                // Sync latest cookies from active ConnectionManager connections into the newly loaded DB
+                // (Zalo may have refreshed cookies while boss was on a different workspace)
+                if (runtimeChanged) {
+                    try {
+                        const db = DatabaseService.getInstance();
+                        for (const [zaloId, conn] of ConnectionManager.getAllConnections()) {
+                            if (conn.auth) {
+                                const authObj = typeof conn.auth === 'string' ? JSON.parse(conn.auth) : conn.auth;
+                                if (authObj?.cookies) {
+                                    // Encrypted like saveAccount (previously wrote the raw cookie)
+                                    db.updateAccountAuth(zaloId, authObj.cookies, authObj.imei || '', authObj.userAgent || '');
+                                }
+                            }
+                        }
+                    } catch (err: any) {
+                        Logger.warn(`[workspaceIpc] Cookie sync from ConnectionManager failed: ${err.message}`);
+                    }
+                }
+
+                Logger.log(`[workspaceIpc] switch → workspace=${result.workspace.id} name="${result.workspace.name}" type=${result.workspace.type} mainDb=${runInRuntimeScope(() => DatabaseService.getInstance().getDbPath())} (before ${prevMainDbPath}) runtimeChanged=${runtimeChanged} cachedAssigned=${result.workspace.cachedAssignedAccounts?.length || 0} cachedAccountsData=${result.workspace.cachedAccountsData?.length || 0} cachedPermissions=${result.workspace.cachedPermissions?.length || 0}`);
+
+                // Copy sent to the renderer: do NOT attach _connected/_snapshot to the config object
+                // (that object is written to workspaces.json by saveConfig()).
+                const switchedWorkspace: any = { ...result.workspace };
+
+                // ── Auto-reconnect for remote workspaces ─────────
+                if (result.workspace.type === 'remote' && result.workspace.bossUrl && result.workspace.token) {
+                    const scm = HttpConnectionManager.getInstance();
+                    if (!scm.isConnected(id)) {
+                        Logger.log(`[workspaceIpc] Remote workspace "${result.workspace.name}" not connected - auto-reconnecting...`);
+                        try {
+                            // Connection already in progress (auto-connect / retry) → share that attempt
+                            await scm.connect(id, result.workspace.bossUrl, result.workspace.token);
+                        } catch (err: any) {
+                            Logger.warn(`[workspaceIpc] Auto-reconnect failed for "${result.workspace!.name}": ${err.message}`);
+                        }
+                    } else {
+                        Logger.log(`[workspaceIpc] Remote workspace "${result.workspace.name}" already connected`);
+                    }
+                    // Merge snapshot data into workspace object so renderer gets it in ONE event
+                    // _connected reflects ACTUAL connection status, not snapshot existence
+                    const snapshot = scm.getSnapshot(id);
+                    const status = scm.getStatus(id);
+                    switchedWorkspace._connected = status.connected;
+                    switchedWorkspace._authExpired = status.authExpired;
+                    if (snapshot) {
+                        switchedWorkspace._snapshot = snapshot;
+                    }
+                }
+
+                // Notify the renderer to reload state (the renderer initializes RestQueryService from the URL/token in this payload)
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('workspace:switched', {
+                        workspace: switchedWorkspace,
+                    });
+                }
+            }
+            return result;
+        } catch (err: any) {
+            try {
+                const currentActiveId = wm().getActiveWorkspaceId();
+                if (currentActiveId === id && prevWorkspaceId && prevWorkspaceId !== id) {
+                    wm().restoreActiveWorkspace(prevWorkspaceId);
+                    await syncWorkspaceDatabases();
+                }
+            } catch { /* ignore rollback helper failure */ }
+            const msg = err?.message || String(err) || 'Unknown switch error';
+            Logger.error(`[workspaceIpc] switch error: ${msg}`, err);
+            return { success: false, error: msg };
+        }
+    })));
+
+    // ─── Is Multi-Workspace ──────────────────────────────────────────
+
+    ipcMain.handle('workspace:isMulti', async () => {
+        return { isMulti: wm().isMultiWorkspace() };
+    });
+
+    // ─── Get DB Path for workspace ───────────────────────────────────
+
+    ipcMain.handle('workspace:getDbPath', async (_e, { id }: { id: string }) => {
+        try {
+            const ws = wm().getWorkspaceById(id);
+            if (!ws) return { success: false, error: 'Workspace not found' };
+            const dbPath = wm().resolveDbPath(ws.dbPath || 'deplao-tool.db');
+            return { success: true, dbPath };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Connect Remote Workspace ────────────────────────────────────
+
+    // The ONLY way to (sign in again and) connect: save BOTH the URL and the token in the workspace config
+    // (source of truth), then connect through main → main emits employee:credentials → renderer inits REST.
+    ipcMain.handle('workspace:connectRemote', async (_e, {
+        id, bossUrl, token,
+    }: { id: string; bossUrl: string; token: string }) => {
+        try {
+            const ws = wm().getWorkspaceById(id);
+            if (!ws) return { success: false, error: tr('Workspace không tồn tại') };
+            if (ws.type !== 'remote') return { success: false, error: tr('Workspace này không phải remote') };
+
+            const url = normalizeBossUrl(bossUrl);
+            if (!url || !token) return { success: false, error: tr('Thiếu địa chỉ Boss hoặc token') };
+
+            // Persist updated connection params
+            const changed = credentialsChanged({ bossUrl: ws.bossUrl, token: ws.token }, { bossUrl: url, token });
+            wm().updateWorkspace(id, { bossUrl: url, token });
+
+            const scm = HttpConnectionManager.getInstance();
+            // REST client uses the new config even if this connection attempt fails (main will retry with the new config by itself)
+            if (changed) scm.emitCredentials(id, 'updated');
+
+            const isActive = wm().getActiveWorkspaceId() === id;
+            if (isActive) {
+                const employeeId = employeeIdFromToken(token);
+                if (employeeId) AppModeManager.getInstance().setEmployeeId(employeeId);
+            }
+
+            const result = await scm.connect(id, url, token);
+            if (result.success) {
+                // If this is the active workspace, update AppModeManager
+                if (wm().getActiveWorkspaceId() === id) {
+                    AppModeManager.getInstance().clearOverride();
+                }
+                // The 'workspace:connectionStatus' state emitted by HttpConnectionManager (the single source)
+            }
+            return { success: result.success, error: result.error, authExpired: !!result.authExpired };
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] connectRemote error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Disconnect Remote Workspace ─────────────────────────────────
+
+    ipcMain.handle('workspace:disconnectRemote', async (_e, { id }: { id: string }) => {
+        try {
+            HttpConnectionManager.getInstance().disconnect(id);
+            return { success: true };
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] disconnectRemote error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Get Connection Status for a workspace ────────────────────────
+
+    ipcMain.handle('workspace:getConnectionStatus', async (_e, { id }: { id: string }) => {
+        try {
+            const status = HttpConnectionManager.getInstance().getStatus(id);
+            return { success: true, ...status };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Get All Connection Statuses ────────────────────────────────
+
+    ipcMain.handle('workspace:getAllStatuses', async () => {
+        try {
+            const statuses = HttpConnectionManager.getInstance().getAllStatuses();
+            return { success: true, statuses };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Renderer reports the network is back (window 'online') → check the Boss connection right away ──
+
+    ipcMain.handle('workspace:networkOnline', async () => {
+        try {
+            HttpConnectionManager.getInstance().handleSystemEvent('network-online');
+            return { success: true };
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] networkOnline error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Refresh the employee snapshot (permissions + assigned accounts): 403 ACCOUNT_FORBIDDEN / resync ──
+
+    ipcMain.handle('workspace:refreshSnapshot', async (_e, { id, reason }: { id: string; reason?: string }) => {
+        try {
+            if (!id) return { success: false, error: tr('Thiếu workspace id') };
+            return await HttpConnectionManager.getInstance().refreshSnapshot(id, reason || 'renderer');
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] refreshSnapshot error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ─── Remote Login (Employee → Boss authentication) ──────────────
+
+    ipcMain.handle('workspace:loginRemote', async (_e, {
+        bossUrl, username, password,
+    }: { bossUrl: string; username: string; password: string }) => {
+        return loginToBoss(bossUrl, username, password);
+    });
+
+    // ─── Saved employee password ("Kết nối lại" (Reconnect) without retyping) ──
+    // Main keeps the safeStorage ciphertext in workspaces.json, OUTSIDE the Workspace object (so it does not leak through workspace:list / getActive /
+    // switched… to the renderer). The renderer only knows whether one exists; the password never goes back to the renderer.
+
+    ipcMain.handle('workspace:rememberPassword', async (_e, { id, password }: { id: string; password: string }) => {
+        try {
+            const ws = wm().getWorkspaceById(id);
+            if (!ws || ws.type !== 'remote') return { success: false, error: tr('Workspace không tồn tại') };
+            if (typeof password !== 'string' || !password) return { success: false, error: tr('Thiếu mật khẩu') };
+            if (!canEncryptPasswords()) {
+                // Cannot be encrypted with the OS key → not saved (the old one is removed too, if present)
+                wm().clearSavedPassword(id);
+                Logger.warn('[workspaceIpc] safeStorage không khả dụng — không lưu mật khẩu nhân viên');
+                return { success: true, saved: false };
+            }
+            const enc = safeStorage.encryptString(password).toString('base64');
+            // Tied to the current login username of the workspace (TopBar updates employeeUsername before calling)
+            wm().setSavedPassword(id, { enc, username: normalizeUsername(ws.employeeUsername), savedAt: Date.now() });
+            return { success: true, saved: true };
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] rememberPassword error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('workspace:hasSavedPassword', async (_e, { id }: { id: string }) => {
+        try {
+            return { success: true, saved: !!wm().getSavedPassword(id) };
+        } catch (err: any) {
+            return { success: false, saved: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('workspace:forgetPassword', async (_e, { id }: { id: string }) => {
+        try {
+            wm().clearSavedPassword(id);
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    // Sign in with the saved password: main decrypts it and does exactly what loginRemote does (same result shape)
+    ipcMain.handle('workspace:loginRemoteSaved', async (_e, {
+        id, bossUrl, username,
+    }: { id: string; bossUrl: string; username: string }) => {
+        const unusable = (error: string, cleared = false) => ({
+            success: false, error, code: 'NO_SAVED_PASSWORD', ...(cleared ? { savedPasswordCleared: true } : {}),
+        });
+        try {
+            const ws = wm().getWorkspaceById(id);
+            if (!ws || ws.type !== 'remote') return { success: false, error: tr('Workspace không tồn tại') };
+            const saved = wm().getSavedPassword(id);
+            if (!saved) return unusable(tr('Chưa lưu mật khẩu — vui lòng nhập mật khẩu'));
+            const user = normalizeUsername(username);
+            if (!user) return { success: false, error: tr('Vui lòng nhập tên đăng nhập') };
+            if (saved.username && saved.username !== user) {
+                return unusable(tr('Mật khẩu đã lưu thuộc tài khoản khác — vui lòng nhập mật khẩu'));
+            }
+            if (!canEncryptPasswords()) return unusable(tr('Máy không giải mã được mật khẩu đã lưu — vui lòng nhập mật khẩu'));
+            let password = '';
+            try {
+                password = safeStorage.decryptString(Buffer.from(saved.enc, 'base64'));
+            } catch {
+                // The OS key has changed (Windows account changed, machine reinstalled…) → the ciphertext is useless
+                wm().clearSavedPassword(id);
+                return unusable(tr('Không đọc được mật khẩu đã lưu — vui lòng nhập lại'), true);
+            }
+            const result = await loginToBoss(bossUrl, username, password);
+            if (isWrongPasswordLogin(result)) {
+                // The manager changed the password → drop the saved one, next time enter the new password
+                wm().clearSavedPassword(id);
+                return { ...result, savedPasswordCleared: true };
+            }
+            return result;
+        } catch (err: any) {
+            Logger.error(`[workspaceIpc] loginRemoteSaved error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    });
+}
+

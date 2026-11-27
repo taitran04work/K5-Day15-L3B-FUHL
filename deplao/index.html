@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deplao</title>
+    <style>
+      /* Pre-paint the window before index.css loads (no white flash). Mirrors --background
+         in src/ui/index.css; the data-theme rule keeps it from fighting the light theme. */
+      html { background-color: #131518; }
+      html[data-theme="light"] { background-color: #eceef3; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/ui/main.tsx"></script>
+  </body>
+</html>
+

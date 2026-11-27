@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { ArrowLeft, ArrowUp, Bot, Hand, MessageSquare, Search, Wrench } from "lucide-react"
+import { ArrowLeft, ArrowUp, Bot, Hand, MessageSquare, RefreshCw, Search, Wrench } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -25,6 +25,7 @@ interface ConversationDetail {
 }
 
 const filters = ["all", "attention", "human", "bot"] as const
+const channels = ["all", "Zalo", "Facebook", "Telegram", "WebWidget"] as const
 
 function ToolRow({ m }: { m: ChatMessage }) {
   const { t } = useTranslation()
@@ -44,6 +45,7 @@ export default function Inbox() {
   const [params, setParams] = useSearchParams()
   const selected = params.get("c")
   const [filter, setFilter] = useState<(typeof filters)[number]>("all")
+  const [channel, setChannel] = useState<(typeof channels)[number]>("all")
   const [q, setQ] = useState("")
   const [reply, setReply] = useState("")
   const [bookingOpen, setBookingOpen] = useState<string | null>(null)
@@ -51,8 +53,17 @@ export default function Inbox() {
   const listEnd = useRef<HTMLDivElement>(null)
 
   const list = useQuery({
-    queryKey: ["inbox", "list", q],
-    queryFn: () => api.get<ConversationSummary[]>(`/api/app/inbox/conversations${qs({ q })}`),
+    queryKey: ["inbox", "list", q, channel],
+    queryFn: () => api.get<ConversationSummary[]>(`/api/app/inbox/conversations${qs({ q, channel: channel === "all" ? undefined : channel })}`),
+  })
+  const sync = useMutation({
+    mutationFn: () =>
+      api.post<{ syncedAt: string; deplaoConnected: boolean; zaloAccountsOnline: number; totalConversations: number }>("/api/app/inbox/sync"),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ["inbox"] })
+      toast.success(r.deplaoConnected ? t("inbox.syncedDeplao", { online: r.zaloAccountsOnline }) : t("inbox.synced", { count: r.totalConversations }))
+    },
+    onError: (e) => toast.error(errorMessage(e)),
   })
   const detail = useQuery({
     queryKey: ["inbox", "detail", selected],
@@ -112,7 +123,13 @@ export default function Inbox() {
       {/* Conversation list */}
       <aside className={cn("flex w-full shrink-0 flex-col border-r md:w-[340px]", selected && "max-md:hidden")}>
         <div className="space-y-3 border-b px-4 py-4">
-          <h1 className="text-lg">{t("inbox.title")}</h1>
+          <div className="flex items-center justify-between gap-2">
+            <h1 className="text-lg">{t("inbox.title")}</h1>
+            <Button variant="ghost" size="sm" onClick={() => sync.mutate()} disabled={sync.isPending} aria-label={t("inbox.sync")}>
+              <RefreshCw className={cn("size-3.5", sync.isPending && "animate-spin")} />
+              <span className="ml-1 text-xs">{t("inbox.sync")}</span>
+            </Button>
+          </div>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("inbox.search")} className="h-8 pl-9" aria-label={t("inbox.search")} />
@@ -121,6 +138,13 @@ export default function Inbox() {
             {filters.map((f) => (
               <button key={f} role="tab" aria-selected={filter === f} onClick={() => setFilter(f)} className={cn("whitespace-nowrap rounded-md px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground", filter === f && "bg-muted font-medium text-foreground")}>
                 {t(`inbox.filter.${f}`)}
+              </button>
+            ))}
+          </div>
+          <div className="-mx-1 flex flex-wrap gap-1 px-1" role="tablist">
+            {channels.map((ch) => (
+              <button key={ch} role="tab" aria-selected={channel === ch} onClick={() => setChannel(ch)} className={cn("whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground", channel === ch && "bg-brand/10 font-medium text-brand")}>
+                {t(`inbox.channelFilter.${ch}`)}
               </button>
             ))}
           </div>
@@ -154,7 +178,7 @@ export default function Inbox() {
                       </span>
                       <span className="mt-0.5 block truncate text-xs text-muted-foreground">{c.lastMessagePreview}</span>
                       <span className="mt-1 flex items-center gap-1.5 text-[11px] text-subtle">
-                        <span>{c.channel === "Zalo" ? "Zalo" : t("inbox.website")}</span>
+                        <span>{c.channel === "WebWidget" ? t("inbox.website") : c.channel}</span>
                         {c.status === "HumanTakeover" && <span>· {t("inbox.youReplying")}</span>}
                         {c.bookingCode && <span className="font-mono">· {c.bookingCode}</span>}
                         {c.unreadCount > 0 && <span className="ml-auto rounded-full bg-brand px-1.5 font-semibold text-brand-foreground tabular">{c.unreadCount}</span>}
@@ -193,7 +217,7 @@ export default function Inbox() {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold">{name(conv)}</p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {conv.channel === "Zalo" ? "Zalo" : t("inbox.website")} · {conv.status === "HumanTakeover" ? t("inbox.statusHuman") : conv.status === "Closed" ? t("inbox.statusClosed") : t("inbox.statusBot")}
+                  {conv.channel === "WebWidget" ? t("inbox.website") : conv.channel} · {conv.status === "HumanTakeover" ? t("inbox.statusHuman") : conv.status === "Closed" ? t("inbox.statusClosed") : t("inbox.statusBot")}
                 </p>
               </div>
               {conv.status === "HumanTakeover" ? (

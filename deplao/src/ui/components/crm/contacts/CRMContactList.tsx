@@ -1,0 +1,864 @@
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { reportBrokenAvatar } from '@/lib/contacts/contactRefresh';
+import type { CRMContact } from '@/store/crm/crmStore';
+import type { ContactTypeFilter, GenderFilter, BirthdayFilter } from '@/store/crm/crmStore';
+import type { LabelData } from '@/store/app/appStore';
+import { useAppStore } from '@/store/app/appStore';
+import type { LocalLabelItem } from '@/components/common/inputs/LocalLabelSelector';
+import ZaloLabelBadge from '../tags/ZaloLabelBadge';
+import { UserProfilePopup } from '@/components/common/profile/UserProfilePopup';
+import PhoneDisplay from '@/components/common/inputs/PhoneDisplay';
+import GroupAvatar from '@/components/common/avatars/GroupAvatar';
+import PageLoading from '@/components/common/PageLoading';
+import { CalendarIcon, ClockIcon, CloseIcon, CloudIcon, EditIcon, FolderIcon, GhostIcon, GiftIcon, HardDriveIcon, PhoneIcon, StarIcon, TagIcon, UserCheckIcon, UserIcon, UsersIcon } from '@/components/common/icons';
+import { CHANNEL } from '@/lib/channels/channelHelper';
+import type { Channel } from '../../../../configs/channels/channelConfig';
+import PeerInitials from '@/components/common/avatars/PeerInitials';
+import { tr, appLocale } from '../../../../shared/i18n';
+import { trx } from '@/lib/i18n/trx';
+
+
+
+/** Pagination bar with page numbers + jump-to-page + page size selector */
+function PaginationBar({ page, totalPages, total, pageSize, onPageChange, onPageSizeChange }: {
+  page: number; totalPages: number; total: number; pageSize: number;
+  onPageChange: (p: number) => void;
+  onPageSizeChange?: (size: number) => void;
+}) {
+  const [jumpInput, setJumpInput] = useState('');
+  const [showJump, setShowJump] = useState(false);
+
+  // Generate page numbers to display: always show first, last, current ± 2
+  const getPageNumbers = (): (number | '...')[] => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i);
+    const pages: (number | '...')[] = [0];
+    const start = Math.max(1, page - 1);
+    const end = Math.min(totalPages - 2, page + 1);
+    if (start > 1) pages.push('...');
+    for (let i = start; i <= end; i++) pages.push(i);
+    if (end < totalPages - 2) pages.push('...');
+    pages.push(totalPages - 1);
+    return pages;
+  };
+
+  const handleJump = () => {
+    const p = parseInt(jumpInput, 10);
+    if (!isNaN(p) && p >= 1 && p <= totalPages) {
+      onPageChange(p - 1);
+      setJumpInput('');
+      setShowJump(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between px-4 py-2 border-t border-border flex-shrink-0">
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-subtle-foreground">{trx('{{v1}} liên hệ', { v1: total.toLocaleString(appLocale()) })}</span>
+        {onPageSizeChange && (
+          <select
+            value={pageSize}
+            onChange={e => onPageSizeChange(Number(e.target.value))}
+            className="bg-card border border-input rounded px-1.5 py-0.5 text-[11px] text-foreground/80 focus:outline-none focus:border-blue-500 cursor-pointer">
+            {[50, 100, 200, 500].map(s => (
+              <option key={s} value={s}>{tr('{{s}}/trang', { s })}</option>
+            ))}
+          </select>
+        )}
+      </div>
+      <div className="flex items-center gap-1">
+        <button disabled={page === 0} onClick={() => onPageChange(0)}
+          className="px-1.5 py-1 rounded bg-muted text-xs text-foreground/80 hover:bg-accent disabled:opacity-30">«</button>
+        <button disabled={page === 0} onClick={() => onPageChange(page - 1)}
+          className="px-1.5 py-1 rounded bg-muted text-xs text-foreground/80 hover:bg-accent disabled:opacity-30">‹</button>
+
+        {getPageNumbers().map((p, i) =>
+          p === '...' ? (
+            <button key={`e${i}`} onClick={() => setShowJump(v => !v)}
+              className="px-1.5 py-1 text-xs text-subtle-foreground hover:text-foreground/80 cursor-pointer">…</button>
+          ) : (
+            <button key={p} onClick={() => onPageChange(p)}
+              className={`min-w-[28px] px-1.5 py-1 rounded text-xs font-medium transition-colors ${
+                p === page
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-muted text-foreground/80 hover:bg-accent'
+              }`}>{p + 1}</button>
+          )
+        )}
+
+        <button disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}
+          className="px-1.5 py-1 rounded bg-muted text-xs text-foreground/80 hover:bg-accent disabled:opacity-30">›</button>
+        <button disabled={page >= totalPages - 1} onClick={() => onPageChange(totalPages - 1)}
+          className="px-1.5 py-1 rounded bg-muted text-xs text-foreground/80 hover:bg-accent disabled:opacity-30">»</button>
+
+        {showJump && (
+          <div className="flex items-center gap-1 ml-2">
+            <input
+              value={jumpInput}
+              onChange={e => setJumpInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleJump(); }}
+              placeholder="Trang..."
+              className="w-14 bg-card border border-input rounded px-1.5 py-1 text-xs text-foreground placeholder-subtle-foreground focus:outline-none focus:border-blue-500 text-center"
+              autoFocus
+            />
+            <button onClick={handleJump}
+              className="px-2 py-1 rounded bg-blue-600 text-xs text-white hover:bg-blue-700">{tr('Đến')}</button>
+          </div>
+        )}
+      </div>
+      <span className="text-[11px] text-subtle-foreground">{trx('Trang {{v1}}/{{totalPages}}', { v1: page + 1, totalPages })}</span>
+    </div>
+  );
+}
+
+interface CRMContactListProps {
+  contacts: CRMContact[];
+  total: number;
+  page: number;
+  pageSize: number;
+  loading: boolean;
+  selectedIds: Set<string>;
+  activeContactId: string | null;
+  allLabels: LabelData[];
+  filterLabelIds: number[];
+  filterLocalLabelIds: number[];
+  filterContactTypes: ContactTypeFilter[];
+  filterGender: GenderFilter;
+  filterBirthday: BirthdayFilter;
+  searchText: string;
+  sortBy: 'name' | 'last_message';
+  sortDir: 'asc' | 'desc';
+  activeAccountId: string;
+  channel?: Channel;
+  localLabels?: LocalLabelItem[];
+  localLabelThreadMap?: Record<string, number[]>;
+  onSelectContact: (id: string) => void;
+  onActivateContact: (id: string) => void;
+  onSelectAll: () => void;
+  onClearAll: () => void;
+  onExportAll?: () => Promise<any[]>;
+  onFilterChange: (f: any) => void;
+  onPageChange: (page: number) => void;
+  onPageSizeChange?: (size: number) => void;
+  onMessage?: (contact: CRMContact) => void;
+  onImportPhones?: () => void;
+}
+
+/** Dropdown to pick labels for filtering - supports Local + Zalo tabs */
+function LabelFilterDropdown({ allLabels, filterLabelIds, filterLocalLabelIds, onChange, localLabels, supportsZaloLabels }: {
+  allLabels: LabelData[];
+  filterLabelIds: number[];
+  filterLocalLabelIds: number[];
+  onChange: (update: { filterLabelIds?: number[]; filterLocalLabelIds?: number[] }) => void;
+  localLabels?: LocalLabelItem[];
+  supportsZaloLabels: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<'local' | 'zalo'>('local');
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+  useEffect(() => { if (!supportsZaloLabels) setTab('local'); }, [supportsZaloLabels]);
+
+  const toggleLocal = (id: number) => onChange({
+    filterLocalLabelIds: filterLocalLabelIds.includes(id)
+      ? filterLocalLabelIds.filter(x => x !== id)
+      : [...filterLocalLabelIds, id],
+  });
+  const toggleZalo = (id: number) => onChange({
+    filterLabelIds: filterLabelIds.includes(id)
+      ? filterLabelIds.filter(x => x !== id)
+      : [...filterLabelIds, id],
+  });
+
+  const activeCount = filterLabelIds.length + filterLocalLabelIds.length;
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button onClick={() => setOpen(v => !v)}
+        className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+          activeCount > 0 ? 'bg-blue-600 border-blue-600 text-white' : 'border-input text-muted-foreground hover:border-border-strong'
+        }`}><TagIcon className="w-4 h-4 inline" /> {activeCount > 0 ? tr('{{activeCount}} nhãn', { activeCount }) : tr('Nhãn')}
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-card border border-input rounded-xl shadow-xl z-50 min-w-[180px] max-h-64 overflow-hidden flex flex-col">
+          {/* Local / Zalo tabs */}
+          <div className="px-2 pt-1.5 pb-1 border-b border-border/60 flex-shrink-0">
+            <div className="flex bg-muted/60 rounded-md p-0.5 gap-0.5">
+              <button onClick={() => setTab('local')}
+                className={`flex-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                  tab === 'local' ? 'bg-blue-600 text-white' : 'text-muted-foreground hover:text-foreground'
+                }`}>{trx('<0/> Local', { 0: <HardDriveIcon className="w-4 h-4 inline" /> })}</button>
+              {supportsZaloLabels && <button onClick={() => setTab('zalo')}
+                className={`flex-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                  tab === CHANNEL.ZALO ? 'bg-blue-600 text-white' : 'text-muted-foreground hover:text-foreground'
+                }`}><CloudIcon className="w-4 h-4 inline" /> Zalo</button>}
+            </div>
+          </div>
+          <div className="overflow-y-auto">
+            {tab === 'local' ? (
+              !localLabels?.length
+                ? <p className="text-xs text-muted-foreground px-3 py-2">{tr('Chưa có Nhãn Local')}</p>
+                : localLabels.map(label => (
+                    <button key={`local-${label.id}`} onClick={() => toggleLocal(label.id)}
+                      className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted text-left transition-colors">
+                      <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center text-[11px] ${filterLocalLabelIds.includes(label.id) ? 'bg-blue-600 border-blue-600 text-white' : 'border-border-strong'}`}>
+                        {filterLocalLabelIds.includes(label.id) && '✓'}
+                      </span>
+                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium"
+                        style={{ backgroundColor: label.color || '#3b82f6', color: label.text_color || '#fff' }}>
+                        {label.emoji && <span className="text-[9px]">{label.emoji}</span>}
+                        <span className="truncate">{label.name}</span>
+                      </span>
+                    </button>
+                  ))
+            ) : (
+              !allLabels.length
+                ? <p className="text-xs text-muted-foreground px-3 py-2">{tr('Chưa có nhãn Zalo')}</p>
+                : allLabels.map(label => (
+                    <button key={label.id} onClick={() => toggleZalo(label.id)}
+                      className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted text-left transition-colors">
+                      <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center text-[11px] ${filterLabelIds.includes(label.id) ? 'bg-blue-600 border-blue-600 text-white' : 'border-border-strong'}`}>
+                        {filterLabelIds.includes(label.id) && '✓'}
+                      </span>
+                      <ZaloLabelBadge label={label} size="xs" />
+                    </button>
+                  ))
+            )}
+          </div>
+          {activeCount > 0 && (
+            <button onClick={() => onChange({ filterLabelIds: [], filterLocalLabelIds: [] })}
+              className="w-full text-xs text-muted-foreground hover:text-foreground px-3 py-2 border-t border-border text-left flex-shrink-0">
+              {tr('Xóa bộ lọc')}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Multi-select dropdown for contact type filter */
+function ContactTypeFilterDropdown({ filterContactTypes, onChange, supportsFriendState }: {
+  filterContactTypes: ContactTypeFilter[];
+  onChange: (types: ContactTypeFilter[]) => void;
+  supportsFriendState: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
+  const toggle = (type: ContactTypeFilter) => {
+    onChange(filterContactTypes.includes(type)
+      ? filterContactTypes.filter(t => t !== type)
+      : [...filterContactTypes, type]);
+  };
+
+  const allOptions: { key: ContactTypeFilter; label: string; icon: React.ReactNode }[] = [
+    { key: 'friend', label: tr('Bạn bè'), icon: <UserCheckIcon className="w-4 h-4" /> },
+    { key: 'non_friend', label: tr('Chưa là bạn bè'), icon: <GhostIcon className="w-4 h-4" /> },
+    { key: 'group', label: tr('Nhóm'), icon: <UsersIcon className="w-4 h-4" /> },
+    { key: 'has_phone', label: tr('Có SĐT'), icon: <PhoneIcon className="w-4 h-4" /> },
+    { key: 'has_notes', label: tr('Có ghi chú'), icon: <EditIcon className="w-4 h-4" /> },
+  ];
+  const OPTIONS = supportsFriendState
+    ? allOptions
+    : allOptions.filter(option => option.key !== 'friend' && option.key !== 'non_friend');
+
+  const activeCount = filterContactTypes.length;
+  const label = activeCount === 0
+    ? tr('Loại')
+    : activeCount === 1
+      ? OPTIONS.find(o => o.key === filterContactTypes[0])?.label ?? tr('Loại')
+      : tr('{{activeCount}} loại', { activeCount });
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button onClick={() => setOpen(v => !v)}
+        className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+          activeCount > 0 ? 'bg-blue-600 border-blue-600 text-white' : 'border-input text-muted-foreground hover:border-border-strong'
+        }`}><FolderIcon className="w-4 h-4 inline" /> {label}
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-0.5">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-card border border-input rounded-xl shadow-xl z-50 min-w-[180px] overflow-hidden">
+          {OPTIONS.map(opt => (
+            <button key={opt.key} onClick={() => toggle(opt.key)}
+              className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-muted text-left transition-colors">
+              <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center text-[11px] ${filterContactTypes.includes(opt.key) ? 'bg-blue-600 border-blue-600 text-white' : 'border-border-strong'}`}>
+                {filterContactTypes.includes(opt.key) && '✓'}
+              </span>
+              <span className="text-xs">{opt.icon}</span>
+              <span className="text-xs text-foreground">{opt.label}</span>
+            </button>
+          ))}
+          {activeCount > 0 && (
+            <button onClick={() => onChange([])}
+              className="w-full text-xs text-muted-foreground hover:text-foreground px-3 py-2 border-t border-border text-left">
+              {tr('Xóa bộ lọc')}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Styled sort dropdown matching other filter dropdowns */
+function GenderFilterDropdown({ value, onChange }: {
+  value: GenderFilter;
+  onChange: (v: GenderFilter) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
+  const OPTIONS: { key: GenderFilter; label: string; icon: React.ReactNode }[] = [
+    { key: 'all', label: tr('Tất cả'), icon: <UserIcon className="w-4 h-4" /> },
+    { key: 'male', label: tr('Nam'), icon: <UserIcon className="w-4 h-4" /> },
+    { key: 'female', label: tr('Nữ'), icon: <UserIcon className="w-4 h-4" /> },
+    { key: 'unknown', label: tr('Không xác định'), icon: <CloseIcon className="w-4 h-4" /> },
+  ];
+
+  const current = OPTIONS.find(o => o.key === value);
+  const isActive = value !== 'all';
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button onClick={() => setOpen(v => !v)}
+        className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+          isActive ? 'bg-blue-600 border-blue-600 text-white' : 'border-input text-muted-foreground hover:border-border-strong'
+        }`}>
+        {isActive ? `${current?.icon} ${current?.label}` : tr('⚧ Giới tính')}
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-0.5">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-card border border-input rounded-xl shadow-xl z-50 min-w-[140px] overflow-hidden">
+          {OPTIONS.map(opt => (
+            <button key={opt.key} onClick={() => { onChange(opt.key); setOpen(false); }}
+              className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-muted text-left transition-colors ${
+                value === opt.key ? 'bg-muted/60' : ''
+              }`}>
+              <span className="text-xs">{opt.icon}</span>
+              <span className="text-xs text-foreground">{opt.label}</span>
+              {value === opt.key && <span className="ml-auto text-blue-400 text-[11px]">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BirthdayFilterDropdown({ value, onChange }: {
+  value: BirthdayFilter;
+  onChange: (v: BirthdayFilter) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
+  const OPTIONS: { key: BirthdayFilter; label: string; icon: React.ReactNode }[] = [
+    { key: 'all', label: tr('Tất cả'), icon: <CalendarIcon className="w-4 h-4" /> },
+    { key: 'today', label: tr('Hôm nay'), icon: <GiftIcon className="w-4 h-4" /> },
+    { key: 'this_week', label: tr('Tuần này'), icon: <CalendarIcon className="w-4 h-4" /> },
+    { key: 'this_month', label: tr('Tháng này'), icon: <StarIcon className="w-4 h-4" /> },
+    { key: 'has_birthday', label: tr('Có ngày sinh'), icon: <GiftIcon className="w-4 h-4" /> },
+    { key: 'no_birthday', label: tr('Chưa có'), icon: <CloseIcon className="w-4 h-4" /> },
+  ];
+
+  const current = OPTIONS.find(o => o.key === value);
+  const isActive = value !== 'all';
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button onClick={() => setOpen(v => !v)}
+        className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+          isActive ? 'bg-blue-600 border-blue-600 text-white' : 'border-input text-muted-foreground hover:border-border-strong'
+        }`}>
+        {isActive ? `${current?.icon} ${current?.label}` : tr('Sinh nhật')}
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-0.5">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-card border border-input rounded-xl shadow-xl z-50 min-w-[180px] overflow-hidden">
+          {OPTIONS.map(opt => (
+            <button key={opt.key} onClick={() => { onChange(opt.key); setOpen(false); }}
+              className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-muted text-left transition-colors ${
+                value === opt.key ? 'bg-muted/60' : ''
+              }`}>
+              <span className="text-xs">{opt.icon}</span>
+              <span className="text-xs text-foreground">{opt.label}</span>
+              {value === opt.key && <span className="ml-auto text-blue-400 text-[11px]">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Styled sort dropdown matching other filter dropdowns */
+function SortDropdown({ sortBy, sortDir, onChange }: {
+  sortBy: string; sortDir: string;
+  onChange: (sortBy: string, sortDir: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
+  const OPTIONS = [
+    { key: 'name:asc', label: tr('Tên A → Z'), icon: '' },
+    { key: 'name:desc', label: tr('Tên Z → A'), icon: '' },
+    { key: 'last_message:desc', label: tr('Tin nhắn gần nhất'), icon: <ClockIcon className="w-4 h-4" /> },
+  ];
+  const current = `${sortBy}:${sortDir}`;
+  const currentLabel = OPTIONS.find(o => o.key === current)?.label || tr('Sắp xếp');
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border border-input text-muted-foreground hover:border-border-strong transition-colors">
+        {currentLabel}
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-0.5">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-card border border-input rounded-xl shadow-xl z-50 min-w-[180px] overflow-hidden">
+          {OPTIONS.map(opt => {
+            const isActive = current === opt.key;
+            return (
+              <button key={opt.key} onClick={() => { const [sb, sd] = opt.key.split(':'); onChange(sb, sd); setOpen(false); }}
+                className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-muted text-left transition-colors">
+                <span className={`w-3.5 h-3.5 rounded-full border flex-shrink-0 flex items-center justify-center text-[11px] ${isActive ? 'bg-blue-600 border-blue-600 text-white' : 'border-border-strong'}`}>
+                  {isActive && '●'}
+                </span>
+                <span className="text-xs">{opt.icon}</span>
+                <span className="text-xs text-foreground">{opt.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Actions dropdown - replaces the old Export CSV button */
+function ActionsDropdown({ total, exportingCSV, onExportCSV, onImportPhones }: {
+  total: number;
+  exportingCSV: boolean;
+  onExportCSV: () => void;
+  onImportPhones?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 text-xs text-foreground/80 hover:text-foreground bg-muted hover:bg-accent px-2.5 py-1.5 rounded-lg transition-colors border border-input hover:border-border-strong">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>
+        </svg>
+        {tr('Thao tác')}
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full right-0 mt-1 bg-card border border-input rounded-xl shadow-xl z-50 min-w-[200px] overflow-hidden py-1">
+          {/* Export CSV */}
+          <button
+            onClick={() => { onExportCSV(); setOpen(false); }}
+            disabled={total === 0 || exportingCSV}
+            className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors text-left disabled:opacity-40">
+            {exportingCSV ? (
+              <svg className="animate-spin flex-shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+              </svg>
+            ) : (
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+            )}
+            <span>{exportingCSV ? tr('Đang xuất...') : tr('Xuất CSV ({{total}})', { total })}</span>
+          </button>
+          {/* Import phones */}
+          {onImportPhones && (
+            <button
+              onClick={() => { onImportPhones(); setOpen(false); }}
+              className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors text-left">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 text-green-400">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/>
+                <line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>
+              </svg>
+              <span>{tr('Thêm liên hệ theo SĐT')}</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function CRMContactList({
+  contacts, total, page, pageSize, loading, selectedIds, activeContactId,
+  allLabels, filterLabelIds, filterLocalLabelIds, filterContactTypes, filterGender, filterBirthday, searchText, sortBy, sortDir,
+  activeAccountId, channel = CHANNEL.ZALO, localLabels, localLabelThreadMap,
+  onSelectContact, onActivateContact, onSelectAll, onClearAll,
+  onExportAll,
+  onFilterChange, onPageChange, onPageSizeChange, onMessage, onImportPhones,
+}: CRMContactListProps) {
+  const totalPages = Math.ceil(total / pageSize);
+  const groupInfoCache = useAppStore(s => s.groupInfoCache);
+
+  const [avatarPopup, setAvatarPopup] = useState<{ userId: string; x: number; y: number } | null>(null);
+  const [exportingCSV, setExportingCSV] = useState(false);
+
+  const fmt = (ts: number) => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const now = new Date();
+    if (d.getFullYear() === now.getFullYear())
+      return d.toLocaleDateString(appLocale(), { day: '2-digit', month: '2-digit' });
+    return d.toLocaleDateString(appLocale(), { day: '2-digit', month: '2-digit', year: '2-digit' });
+  };
+
+  function escapeCSV(val: any): string {
+    const s = String(val ?? '');
+    // Excel turns long numbers (phone numbers, UIDs) into scientific notation → force them to stay as text
+    if (/^\d+$/.test(s) && s.length >= 5)
+      return '="' + s + '"';
+    if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r'))
+      return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+
+  const exportToCSV = useCallback(async () => {
+    if (total === 0) return;
+    setExportingCSV(true);
+    try {
+      // Fetch ALL contacts matching current filter (not just current page)
+      const allContacts = onExportAll ? await onExportAll() : (contacts || []);
+      if (!allContacts?.length) return;
+
+      const headers = [tr('Tên hiển thị'), tr('Biệt danh'), tr('Điện thoại'), 'UID', tr('Loại'), tr('Bạn bè'), tr('Giới tính'), tr('Sinh nhật'), tr('Tin nhắn cuối'), tr('Ghi chú')];
+      const rows = allContacts.map((c: any) => {
+        const typeLabel = c.contact_type === 'group' ? tr('Nhóm') : c.is_friend === 1 ? tr('Bạn bè') : tr('Chưa là bạn bè');
+        const genderLabel = c.gender === 0 ? 'Nam' : c.gender === 1 ? tr('Nữ') : '';
+        return [
+          escapeCSV(c.display_name || c.contact_id),
+          escapeCSV(c.alias || ''),
+          escapeCSV(c.phone || ''),
+          escapeCSV(c.contact_id),
+          escapeCSV(typeLabel),
+          escapeCSV(c.is_friend === 1 ? tr('Có') : tr('Không')),
+          escapeCSV(genderLabel),
+          escapeCSV(c.birthday || ''),
+          escapeCSV(c.last_message_time ? new Date(c.last_message_time).toLocaleString(appLocale()) : ''),
+          escapeCSV(c.note_count || 0),
+        ].join(',');
+      });
+      const csv = [headers.join(','), ...rows].join('\r\n');
+      const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `lien_he_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportingCSV(false);
+    }
+  }, [contacts, total, onExportAll]);
+
+  const getContactLabels = (contact: CRMContact): LabelData[] => {
+    const contactId = contact.contact_id;
+    const isGroup = contact.contact_type === 'group';
+    const prefixedId = isGroup ? `g${contactId}` : contactId;
+    return allLabels.filter(l =>
+      l.conversations?.includes(contactId) ||
+      (isGroup && l.conversations?.includes(prefixedId))
+    );
+  };
+
+  const allSelected = contacts.length > 0 && contacts.every(c => selectedIds.has(c.contact_id));
+  const isZalo = channel === CHANNEL.ZALO;
+
+  // contacts mapped to the shape UserProfilePopup expects
+  const contactsForPopup = contacts.map(c => ({
+    contact_id: c.contact_id,
+    display_name: c.display_name,
+    alias: c.alias,
+    avatar_url: c.avatar,
+    phone: c.phone,
+    channel: (c as any).channel,
+  }));
+
+  return (
+    <div className="flex flex-col h-full bg-card">
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border flex-shrink-0">
+        {/* Label dropdown filter (Local + Zalo) */}
+        <LabelFilterDropdown
+          allLabels={allLabels}
+          filterLabelIds={filterLabelIds}
+          filterLocalLabelIds={filterLocalLabelIds}
+          onChange={update => onFilterChange({ ...update, page: 0 })}
+          localLabels={localLabels}
+          supportsZaloLabels={isZalo}
+        />
+
+        {/* Contact type multi-select filter */}
+        <ContactTypeFilterDropdown
+          filterContactTypes={filterContactTypes}
+          onChange={types => onFilterChange({ filterContactTypes: types, page: 0 })}
+          supportsFriendState={isZalo}
+        />
+
+        {/* Gender filter */}
+        {isZalo && <GenderFilterDropdown
+          value={filterGender}
+          onChange={v => onFilterChange({ filterGender: v, page: 0 })}
+        />}
+
+        {/* Birthday filter */}
+        {isZalo && <BirthdayFilterDropdown
+          value={filterBirthday}
+          onChange={v => onFilterChange({ filterBirthday: v, page: 0 })}
+        />}
+
+        {/* Sort dropdown (styled) */}
+        <SortDropdown sortBy={sortBy} sortDir={sortDir} onChange={(sb, sd) => onFilterChange({ sortBy: sb, sortDir: sd, page: 0 })} />
+
+
+        {/* Search */}
+        <div className="relative flex-1 max-w-xs">
+          <svg width="13" height="13" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+               viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input value={searchText} onChange={e => onFilterChange({ searchText: e.target.value, page: 0 })}
+                 placeholder={tr('Tên, SĐT, UID...')}
+                 className="w-full bg-card border border-input rounded-lg pl-7 pr-3 py-1.5 text-xs text-foreground placeholder-subtle-foreground focus:outline-none focus:border-blue-500 transition-colors" />
+        </div>
+
+        <div className="flex-1"></div>
+
+        {/* Actions dropdown (Export CSV + Import phone numbers) */}
+        <ActionsDropdown
+          total={total}
+          exportingCSV={exportingCSV}
+          onExportCSV={exportToCSV}
+          onImportPhones={onImportPhones}
+        />
+      </div>
+
+      {/* Table header */}
+      <div className="flex items-center px-4 py-2 border-b border-border bg-muted/60 text-xs text-muted-foreground flex-shrink-0">
+        {/* Per-page select button */}
+        <button onClick={allSelected ? onClearAll : onSelectAll}
+          className={`flex items-center gap-1 mr-3 px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap flex-shrink-0 transition-colors border
+            ${allSelected
+              ? 'bg-selected border-primary/40 text-primary hover:bg-primary/20'
+              : 'border-input text-muted-foreground hover:border-border-strong hover:text-foreground/80'}`}>
+          {allSelected ? (
+            <>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+              {trx('Bỏ chọn ({{count}})', { count: contacts.length })}
+            </>
+          ) : (
+            <>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+              {trx('Trang này ({{count}})', { count: contacts.length })}
+            </>
+          )}
+        </button>
+        <span className="w-8 flex-shrink-0" />
+        <span className="flex-1 ml-2">{tr('Tên')}</span>
+        <span className="w-16 flex-shrink-0 text-center">{tr('Giới tính')}</span>
+        <span className="w-24 flex-shrink-0 text-center">{tr('Sinh nhật')}</span>
+        <span className="w-28 flex-shrink-0 ">{tr('Điện thoại')}</span>
+        <span className="w-20 flex-shrink-0 text-right">{tr('Tin nhắn')}</span>
+      </div>
+
+
+      {/* Rows */}
+      <div className="flex-1 overflow-y-auto">
+        {loading ? (
+          <PageLoading variant="skeleton" skeletonVariant="table" />
+        ) : contacts.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-3 opacity-40">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+            </svg>
+            <p className="text-sm">{tr('Không có liên hệ nào')}</p>
+          </div>
+        ) : (
+          contacts.map(contact => {
+            const name = contact.alias || contact.display_name || contact.contact_id;
+            const isSelected = selectedIds.has(contact.contact_id);
+            const isActive = activeContactId === contact.contact_id;
+            const contactLabels = getContactLabels(contact);
+            return (
+              <div key={contact.contact_id}
+                onClick={() => onActivateContact(contact.contact_id)}
+                className={`flex items-center px-4 py-2.5 border-b border-border/50 cursor-pointer transition-colors group ${isActive ? 'bg-selected' : 'hover:bg-muted'}`}>
+                {/* Styled checkbox */}
+                <div
+                  onClick={e => { e.stopPropagation(); onSelectContact(contact.contact_id); }}
+                  className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border transition-colors mr-3 cursor-pointer
+                    ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-input bg-card group-hover:border-border-strong'}`}>
+                  {isSelected && (
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  )}
+                </div>
+                {/* Avatar - click opens UserProfilePopup */}
+                <div className="w-8 h-8 flex-shrink-0 rounded-full overflow-hidden relative group/av cursor-pointer"
+                  onClick={e => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setAvatarPopup({ userId: contact.contact_id, x: rect.right + 8, y: rect.top });
+                  }}>
+                  {contact.contact_type === 'group' ? (
+                    <GroupAvatar
+                      id={contact.contact_id}
+                      avatarUrl={contact.avatar}
+                      groupInfo={(groupInfoCache[activeAccountId] || {})[contact.contact_id]}
+                      name={name}
+                      size="xs"
+                    />
+                  ) : contact.avatar
+                    ? <img key={contact.avatar} src={contact.avatar} alt="" className="w-full h-full object-cover"
+                        onError={(e) => { e.currentTarget.style.display = 'none'; reportBrokenAvatar(activeAccountId, contact.contact_id); }} />
+                    : <PeerInitials id={contact.contact_id} name={name} fallback="U" className="w-full h-full text-xs" />}
+                  {/* hover overlay */}
+                  <div className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover/av:opacity-100 transition-opacity">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+                      <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+                    </svg>
+                  </div>
+                </div>
+                {/* Name + Labels underneath */}
+                <div className="flex-1 ml-2 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm text-foreground truncate font-medium">{name}</span>
+                    {contact.contact_type === 'group'
+                      ? <span className="text-[9px] text-purple-400 flex-shrink-0 bg-purple-400/10 px-1 rounded">{tr('nhóm')}</span>
+                      : contact.is_friend === 1 && <span className="text-[9px] text-green-500 flex-shrink-0">●</span>}
+                    {contact.note_count > 0 && <span className="text-[12px] text-yellow-500 flex-shrink-0"><EditIcon className="w-4 h-4" /></span>}
+                  </div>
+                  {contact.alias && contact.alias !== contact.display_name &&
+                    <p className="text-[11px] text-muted-foreground truncate">{contact.display_name}</p>}
+                  {/* Labels (Local + Zalo) under name */}
+                  {(() => {
+                    const threadLIds = localLabelThreadMap?.[contact.contact_id] || [];
+                    const hasLabels = threadLIds.length > 0 || contactLabels.length > 0;
+                    if (!hasLabels) return null;
+                    return (
+                      <div className="flex gap-1 flex-wrap mt-0.5">
+                        {threadLIds.slice(0, 3).map(lid => {
+                          const ll = localLabels?.find(l => l.id === lid);
+                          if (!ll) return null;
+                          return (
+                            <span key={`ll-${lid}`}
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium max-w-[80px]"
+                              style={{ backgroundColor: ll.color || '#3b82f6', color: ll.text_color || '#fff' }}>
+                              {ll.emoji && <span className="text-[8px]">{ll.emoji}</span>}
+                              <span className="truncate">{ll.name}</span>
+                            </span>
+                          );
+                        })}
+                        {contactLabels.slice(0, 3).map(l => <ZaloLabelBadge key={l.id} label={l} size="xs" />)}
+                        {(threadLIds.length + contactLabels.length) > 3 && (
+                          <span className="text-[10px] text-muted-foreground">+{threadLIds.length + contactLabels.length - 3}</span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+                {/* Gender column */}
+                <span className="w-16 flex-shrink-0 hidden lg:block text-center">
+                  {contact.gender === 0 && <span className="text-[11px] text-blue-400">{tr('♂ Nam')}</span>}
+                  {contact.gender === 1 && <span className="text-[11px] text-pink-400">{tr('♀ Nữ')}</span>}
+                </span>
+                {/* Birthday column */}
+                <span className="w-24 flex-shrink-0 hidden lg:block text-center text-[11px] text-muted-foreground">
+                  {contact.birthday || ''}
+                </span>
+                {/* Phone */}
+                <span className="w-28 flex-shrink-0 hidden md:block">
+                  <PhoneDisplay phone={contact.phone} className="text-xs text-muted-foreground" />
+                </span>
+                {/* Message button + last message time */}
+                <div className="w-20 flex-shrink-0 flex items-center justify-end gap-1">
+                  {onMessage && (
+                    <button
+                      onClick={e => { e.stopPropagation(); onMessage(contact); }}
+                      title={tr('Nhắn tin')}
+                      className="p-1 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors opacity-0 group-hover:opacity-100">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                      </svg>
+                    </button>
+                  )}
+                  <span className="text-[11px] text-muted-foreground">{fmt(contact.last_message_time)}</span>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && <PaginationBar page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />}
+
+      {/* UserProfilePopup */}
+      {avatarPopup && (
+        <UserProfilePopup
+          userId={avatarPopup.userId}
+          anchorX={avatarPopup.x}
+          anchorY={avatarPopup.y}
+          contacts={contactsForPopup}
+          activeAccountId={activeAccountId}
+          activeThreadId={null}
+          onClose={() => setAvatarPopup(null)}
+        />
+      )}
+    </div>
+  );
+}

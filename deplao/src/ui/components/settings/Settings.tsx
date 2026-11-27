@@ -1,0 +1,775 @@
+/**
+ * Settings screen: a menu column grouped into sections (General · Accounts & groups · Data & network · Support) + the page on the right. Each page uses the
+ * shared settingsUi frame (title + 1 description line, blocks, settings rows). Tab codes stay the same because many places open a tab directly through the
+ * nav:settings { tab, subtab } event.
+ */
+import React, { useState, useEffect } from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import ipc from '@/lib/ipc';
+import { cn } from '@/lib/cn';
+import { useAccountStore } from '@/store/accounts/accountStore';
+import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP, useAppStore } from '@/store/app/appStore';
+import { useEmployeeStore } from '@/store/employee/employeeStore';
+import { playNotificationSound, requestNotificationPermission, showDesktopNotification } from '@/lib/notifications/NotificationService';
+import { showConfirm } from '../common/ConfirmDialog';
+import { extractApiError } from '@/lib/app/apiError';
+import {
+  BellIcon, BookIcon, BriefcaseIcon, CheckIcon, ClipboardIcon, CloudIcon, FolderIcon, GlobeIcon, HardDriveIcon, MessageIcon,
+  MoonIcon, PaletteIcon, ShieldIcon, SunIcon, TerminalIcon, UserIcon, UsersIcon,
+} from '../common/icons';
+import IntroductionSettings from './introduction/IntroductionSettings';
+import ChangelogSettings from './changelog/ChangelogSettings';
+import ConversationSettings from './conversation/ConversationSettings';
+import EmployeeSettings from './employees/EmployeeSettings';
+import WorkspaceSettings from './workspace/WorkspaceSettings';
+import ProxySettings from './proxy/ProxySettings';
+import AccountSelect from '../common/accounts/AccountSelect';
+import LockScreenSettings from './security/LockScreenSettings';
+import AccountSettings from './accounts/AccountSettings';
+import InAppNotifySettings from './notifications/InAppNotifySettings';
+import AutoLaunchSettings from './notifications/AutoLaunchSettings';
+import LogViewer from './logs/LogViewer';
+import CloudSettings, { type CloudSection } from './cloud/CloudSettings';
+import CloudMediaSummary from './cloud/CloudMediaSummary';
+import { toCloudSection } from './cloud/cloudUi';
+import { useCloudAlert } from './cloud/useCloudAlert';
+import { loadSeenTabs, markTabSeen, SETTINGS_WATCHLIST, hasUnseenChangelog, markChangelogSeen } from '@/lib/app/settingsSeenTabs';
+import { Button, Select, Switch } from '@/components/ui';
+import { DesignSystemPage } from '@/components/ui/DesignSystemPage';
+import { Notice, PathText, SettingsPage, SettingsRow, SettingsSection } from './settingsUi';
+import { tr } from '../../../shared/i18n';
+import { useUiLanguages } from '@/hooks/i18n/useUiLanguages';
+import { trx } from '@/lib/i18n/trx';
+
+type SettingsTab = 'notifications' | 'accounts' | 'storage' | 'cloud' | 'conversation' | 'employees' | 'workspace' | 'introduction' | 'changelog' | 'appearance' | 'proxy' | 'security' | 'logs';
+
+interface NavItem { id: SettingsTab; icon: React.ReactNode; label: string; requiredPerm?: string }
+
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: tr('Chung'),
+    items: [
+      { id: 'conversation',  icon: <MessageIcon className="w-4 h-4" />, label: tr('Hội thoại') },
+      { id: 'notifications', icon: <BellIcon className="w-4 h-4" />, label: tr('Thông báo') },
+      { id: 'appearance',    icon: <PaletteIcon className="w-4 h-4" />, label: tr('Giao diện') },
+      { id: 'security',      icon: <ShieldIcon className="w-4 h-4" />, label: tr('Bảo mật') },
+    ],
+  },
+  {
+    label: tr('Tài khoản & nhóm'),
+    items: [
+      { id: 'accounts',  icon: <UserIcon className="w-4 h-4" />, label: tr('Tài khoản'), requiredPerm: 'settings_accounts' },
+      { id: 'employees', icon: <UsersIcon className="w-4 h-4" />, label: tr('Nhân viên'), requiredPerm: 'settings_employees' },
+      { id: 'workspace', icon: <BriefcaseIcon className="w-4 h-4" />, label: tr('Workspace') },
+    ],
+  },
+  {
+    label: tr('Dữ liệu & mạng'),
+    items: [
+      { id: 'storage', icon: <HardDriveIcon className="w-4 h-4" />, label: tr('Lưu trữ') },
+      { id: 'cloud',   icon: <CloudIcon className="w-4 h-4" />, label: tr('Internet & Cloud') },
+      { id: 'proxy',   icon: <GlobeIcon className="w-4 h-4" />, label: tr('Proxy') },
+    ],
+  },
+  {
+    label: tr('Hỗ trợ'),
+    items: [
+      { id: 'introduction', icon: <BookIcon className="w-4 h-4" />, label: tr('Giới thiệu') },
+      { id: 'changelog',    icon: <ClipboardIcon className="w-4 h-4" />, label: tr('Log phiên bản') },
+      { id: 'logs',         icon: <TerminalIcon className="w-4 h-4" />, label: tr('Nhật ký') },
+    ],
+  },
+];
+
+export default function Settings() {
+  const [activeTab, setActiveTab] = useState<SettingsTab>('conversation');
+  const [introSubtab, setIntroSubtab] = useState<string | null>(null);
+  // Internet & Cloud: the section opened by nav:settings { tab: 'cloud', subtab: 'address' | 'sync' } ('media' / 'db' old ids → 'sync')
+  const [cloudSubtab, setCloudSubtab] = useState<CloudSection | null>(null);
+  const [seenTabs, setSeenTabs] = useState<Set<string>>(() => loadSeenTabs());
+  const [unreadChangelog, setUnreadChangelog] = useState(() => hasUnseenChangelog());
+  const [storagePath, setStoragePath] = useState<string>('');
+  const [defaultStoragePath, setDefaultStoragePath] = useState<string>('');
+  const [actualDbPath, setActualDbPath] = useState<string>('');
+  const [isEmployee, setIsEmployee] = useState(false);
+  const [mediaCachePath, setMediaCachePath] = useState('');
+  const [mediaCacheSize, setMediaCacheSize] = useState(0);
+  const [changingStorage, setChangingStorage] = useState(false);
+  // Pending folder with existing data - shown in choice modal
+  const [pendingFolder, setPendingFolder] = useState<string | null>(null);
+  // Live progress while copying media
+  const [copyProgress, setCopyProgress] = useState<number>(0);
+  const [copyTotal, setCopyTotal] = useState<number>(0);
+  const showNotification = useAppStore(s => s.showNotification);
+
+  useEffect(() => {
+    ipc.db?.getStoragePath().then((res: any) => {
+      if (res?.success) {
+        setStoragePath(res.path || '');
+        setDefaultStoragePath(res.defaultPath || '');
+        setActualDbPath(res.actualDbPath || '');
+        setIsEmployee(res.isEmployee || false);
+        if (res.isEmployee) {
+          setMediaCachePath(res.mediaCachePath || '');
+          setMediaCacheSize(res.mediaCacheSize || 0);
+        }
+      }
+    });
+  }, []);
+
+  // Listen for navigation events from other screens (e.g. the terms link in the login modal)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { tab, subtab } = (e as CustomEvent).detail || {};
+      // Webhooks moved to Tools → Apps, API & Webhook (old links still open the right place).
+      if (tab === 'webhooks') {
+        const app = useAppStore.getState();
+        app.setPluginHubSection('webhooks');
+        app.openPluginHub();
+        return;
+      }
+      if (tab) setActiveTab(tab as SettingsTab);
+      if (subtab) {
+        if (tab === 'cloud') setCloudSubtab(toCloudSection(subtab));
+        else setIntroSubtab(subtab);
+      }
+    };
+    window.addEventListener('nav:settings', handler);
+    return () => window.removeEventListener('nav:settings', handler);
+  }, []);
+
+  // Mark the tab as seen when the user opens it for the first time
+  useEffect(() => {
+    if ((SETTINGS_WATCHLIST as readonly string[]).includes(activeTab)) {
+      markTabSeen(activeTab);
+      setSeenTabs(loadSeenTabs());
+    }
+    // Changelog: mark the current version log as read
+    if (activeTab === 'changelog') {
+      markChangelogSeen();
+      setUnreadChangelog(false);
+    }
+  }, [activeTab]);
+
+  const handleChangeStorageFolder = async () => {
+    setChangingStorage(true);
+    try {
+      const folderRes = await ipc.db?.selectStorageFolder();
+      if (!folderRes?.success || folderRes.canceled) return;
+      const newFolder = folderRes.folder;
+      if (!newFolder) return;
+
+      // The target folder already has old data → ask the user what to do
+      if (folderRes.hasExistingData) {
+        setPendingFolder(newFolder);
+        return; // the modal will call applyStorageChange
+      }
+
+      // Empty folder → confirm the normal copy
+      const ok = await showConfirm({
+        title: tr('Đổi thư mục lưu trữ?'),
+        message: tr('Thư mục mới:\n{{newFolder}}\n\nDữ liệu hiện tại sẽ được sao chép sang đây.', { newFolder }),
+        confirmText: tr('Tiếp tục'),
+        variant: 'warning',
+      });
+      if (!ok) return;
+      await applyStorageChange(newFolder, false);
+    } catch (err: any) {
+      showNotification(extractApiError(err, tr('Lỗi đổi thư mục')), 'error');
+    } finally {
+      setChangingStorage(false);
+    }
+  };
+
+  /** Apply the folder change - useExisting=true: only changes the pointer, no copy */
+  const applyStorageChange = async (newFolder: string, useExisting: boolean) => {
+    setChangingStorage(true);
+    setCopyProgress(0);
+    setCopyTotal(0);
+
+    // Listen for progress events from the main process
+    const unsub = ipc.on?.('db:copyProgress', (data: { copied: number; total?: number; done?: boolean }) => {
+      setCopyProgress(data.copied);
+      if (data.total) setCopyTotal(data.total);
+    });
+
+    try {
+      const res = await ipc.db?.setStoragePath({ newFolder, useExisting });
+      if (res?.success) {
+        setStoragePath(newFolder);
+        setActualDbPath(res.newPath || '');
+        const msg = res.message || tr('Đã đổi thư mục lưu trữ thành công!');
+        const extra = res.mediaError ? ` (Media: ${res.mediaError})` : '';
+        showNotification(msg + extra, res.mediaError ? 'warning' : 'success');
+      } else {
+        showNotification(extractApiError(res, tr('Không thể đổi thư mục')), 'error');
+      }
+    } catch (err: any) {
+      showNotification(extractApiError(err, tr('Lỗi đổi thư mục')), 'error');
+    } finally {
+      unsub?.();
+      setChangingStorage(false);
+      setCopyProgress(0);
+      setCopyTotal(0);
+      setPendingFolder(null);
+    }
+  };
+
+  const handleResetStoragePath = async () => {
+    const ok = await showConfirm({
+      title: tr('Đặt lại thư mục mặc định?'),
+      message: tr('Dữ liệu sẽ được sao chép về thư mục mặc định và áp dụng ngay.'),
+      confirmText: tr('Đặt lại'),
+      variant: 'warning',
+    });
+    if (!ok) return;
+    await applyStorageChange(defaultStoragePath, false);
+  };
+
+  // Filter nav items by permission - employee/simulation mode may hide certain tabs
+  const { mode: empMode, permissions: empPermissions } = useEmployeeStore(useShallow(s => ({ mode: s.mode, permissions: s.permissions })));
+  const hasSettingsPerm = (perm?: string) => {
+    if (!perm) return true; // no permission required
+    return useEmployeeStore.getState().hasPermission(perm);
+  };
+  // Internet & Cloud (Cloudflare) is for the server only: employee machines do not see it.
+  const hideCloud = isEmployee || empMode === 'employee';
+  const isVisible = (item: NavItem) => hasSettingsPerm(item.requiredPerm) && (item.id !== 'cloud' || !hideCloud);
+  const visibleGroups = NAV_GROUPS
+    .map(group => ({ ...group, items: group.items.filter(isVisible) }))
+    .filter(group => group.items.length > 0);
+  const visibleNavItems = visibleGroups.flatMap(group => group.items);
+  // Red dot when the Cloudflare section needs attention (token / address / media / DB sync error, or just restored).
+  const cloudAlert = useCloudAlert(!hideCloud);
+
+  // Guard: if activeTab is no longer in visibleNavItems (after a workspace/permission change) → reset to the first tab
+  useEffect(() => {
+    const visible = visibleNavItems.some(item => item.id === activeTab);
+    if (!visible && visibleNavItems.length > 0) {
+      setActiveTab(visibleNavItems[0].id);
+    }
+  }, [empMode, empPermissions, hideCloud]);
+
+  const dotFor = (id: SettingsTab): string | null => {
+    if ((SETTINGS_WATCHLIST as readonly string[]).includes(id) && !seenTabs.has(id)) return tr('Mới');
+    if (id === 'changelog' && unreadChangelog) return tr('Có bản cập nhật mới');
+    if (id === 'cloud' && cloudAlert.reasons.length > 0) return cloudAlert.reasons.join(' · ');
+    return null;
+  };
+
+  return (
+    <>
+    <div className="flex h-full overflow-hidden">
+      {/* ─── Left menu ─── */}
+      <nav aria-label={tr('Cài đặt')} className="flex w-52 flex-shrink-0 flex-col overflow-y-auto border-r border-border bg-card pb-4 pt-4">
+        <p className="px-5 text-base font-semibold text-foreground">{tr('Cài đặt')}</p>
+        {visibleGroups.map(group => (
+          <div key={group.label} className="pt-4">
+            <p className="px-5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-subtle-foreground">{group.label}</p>
+            {group.items.map(item => {
+              const active = activeTab === item.id;
+              const dot = dotFor(item.id);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-current={active ? 'page' : undefined}
+                  onClick={() => { setActiveTab(item.id); setCloudSubtab(null); }}
+                  className={cn(
+                    'relative flex w-full items-center gap-2.5 px-5 py-2 text-left text-sm transition-colors',
+                    active ? 'bg-selected font-medium text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                >
+                  {active && <span aria-hidden="true" className="absolute inset-y-1 left-0 w-[3px] rounded-r-full bg-primary" />}
+                  <span className="flex-shrink-0">{item.icon}</span>
+                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                  {/* Red dot: new tab not yet seen / version log not yet read / Internet & Cloud needs attention */}
+                  {dot && <span className="h-2 w-2 flex-shrink-0 rounded-full bg-destructive" title={dot} aria-label={dot} />}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+
+      {/* ─── Trang ─── */}
+      <main className="min-w-0 flex-1 overflow-y-auto">
+        {activeTab === 'appearance' && <AppearancePage />}
+        {activeTab === 'notifications' && <NotificationsPage />}
+        {activeTab === 'accounts' && <AccountSettings />}
+        {activeTab === 'storage' && (
+          <StoragePage
+            isEmployee={isEmployee}
+            storagePath={storagePath}
+            defaultStoragePath={defaultStoragePath}
+            actualDbPath={actualDbPath}
+            mediaCachePath={mediaCachePath}
+            mediaCacheSize={mediaCacheSize}
+            changing={changingStorage}
+            copyProgress={copyProgress}
+            copyTotal={copyTotal}
+            onChangeFolder={handleChangeStorageFolder}
+            onReset={handleResetStoragePath}
+          />
+        )}
+        {activeTab === 'conversation' && <ConversationSettings />}
+        {activeTab === 'security' && <LockScreenSettings />}
+        {activeTab === 'logs' && <LogViewer />}
+        {activeTab === 'proxy' && <ProxySettings />}
+        {activeTab === 'employees' && <EmployeeSettings />}
+        {activeTab === 'workspace' && <WorkspaceSettings />}
+        {/* Internet & Cloud (Cloudflare, server only) */}
+        {activeTab === 'cloud' && !hideCloud && <CloudSettings initialSubtab={cloudSubtab} />}
+        {activeTab === 'introduction' && <IntroductionSettings initialSubtab={introSubtab as any} />}
+        {activeTab === 'changelog' && <ChangelogSettings />}
+      </main>
+    </div>
+
+    {/* ── Target folder already has data: use that data, or overwrite it with the current data ── */}
+    {pendingFolder && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        onClick={() => !changingStorage && setPendingFolder(null)}>
+        <div role="dialog" aria-modal="true" aria-labelledby="storage-existing-title"
+          className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-popover shadow-2xl"
+          onClick={e => e.stopPropagation()}>
+          <div className="border-b border-border px-5 pb-3 pt-5">
+            <h3 id="storage-existing-title" className="flex items-center gap-2 text-base font-semibold text-foreground">
+              {trx('<0/> Thư mục đã có dữ liệu', { 0: <FolderIcon className="h-5 w-5 text-primary" /> })}
+            </h3>
+            <PathText value={pendingFolder} className="mt-2" />
+            <p className="mt-2 text-xs text-muted-foreground">{tr('Ở đây đã có file dữ liệu Deplao. Bạn muốn làm gì?')}</p>
+          </div>
+
+          <div className="space-y-2.5 p-4">
+            <button
+              type="button"
+              disabled={changingStorage}
+              onClick={() => applyStorageChange(pendingFolder, true)}
+              className="flex w-full items-start gap-3 rounded-xl border-2 border-primary bg-primary/5 p-3.5 text-left transition-colors hover:bg-primary/10 disabled:opacity-50"
+            >
+              <HardDriveIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-foreground">{tr('Dùng dữ liệu có sẵn ở đây')}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{tr('Dữ liệu hiện tại vẫn giữ ở chỗ cũ, không bị xoá.')}</p>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              disabled={changingStorage}
+              onClick={async () => {
+                const ok = await showConfirm({
+                  title: tr('Ghi đè dữ liệu cũ?'),
+                  message: tr('Dữ liệu hiện tại sẽ được sao chép vào:\n{{pendingFolder}}\n\nFile deplao-tool.db cũ tại đó sẽ bị GHI ĐÈ. Thao tác không thể hoàn tác.', { pendingFolder }),
+                  confirmText: tr('Ghi đè'),
+                  variant: 'danger',
+                });
+                if (!ok) return;
+                await applyStorageChange(pendingFolder, false);
+              }}
+              className="flex w-full items-start gap-3 rounded-xl border border-border p-3.5 text-left transition-colors hover:bg-muted disabled:opacity-50"
+            >
+              <FolderIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-foreground">{tr('Chép dữ liệu hiện tại sang đây')}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {trx('Chép cả ảnh, video, file. <0>Dữ liệu cũ ở đây sẽ bị ghi đè.</0>', { 0: <span className="text-destructive" /> })}
+                </p>
+              </div>
+            </button>
+          </div>
+
+          <div className="px-4 pb-4">
+            {changingStorage && (
+              <div className="mb-3 rounded-xl bg-muted px-3 py-3">
+                {copyProgress > 0 ? (
+                  <>
+                    <div className="mb-1.5 flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1.5 font-medium text-primary">
+                        <span className="h-3 w-3 flex-shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                        {tr('Đang chép ảnh, file...')}
+                      </span>
+                      <span className="font-mono tabular-nums text-foreground/80">
+                        {copyProgress.toLocaleString()}
+                        {copyTotal > 0 && <span className="text-muted-foreground"> / {copyTotal.toLocaleString()}</span>}
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-accent">
+                      <div
+                        className="h-full rounded-full bg-primary transition-all duration-200"
+                        style={{ width: copyTotal > 0 ? `${Math.min(100, (copyProgress / copyTotal) * 100).toFixed(1)}%` : '100%' }}
+                      />
+                    </div>
+                    {copyTotal > 0 && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {trx('{{v1}}% - đừng đóng ứng dụng', { v1: ((copyProgress / copyTotal) * 100).toFixed(0) })}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="h-3 w-3 flex-shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    {tr('Đang chuẩn bị...')}
+                  </div>
+                )}
+              </div>
+            )}
+            <Button variant="ghost" className="w-full" disabled={changingStorage} onClick={() => setPendingFolder(null)}>
+              {changingStorage ? tr('Đang xử lý...') : tr('Huỷ')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
+  );
+}
+
+// ─── Appearance ──────────────────────────────────────────────────────────────────────────
+
+/** Preview colors of each theme (fixed, so the "Tối" (Dark) card stays dark when the app is light, and vice versa). */
+const THEME_PREVIEW = {
+  dark: { bg: '#131518', panel: '#1c1f25', line: '#373f49', primary: '#2f7bff' },
+  light: { bg: '#eceef3', panel: '#ffffff', line: '#dde1e7', primary: '#1f6bf2' },
+} as const;
+
+function ThemeCard({ label, icon, preview, active, onSelect }: {
+  label: string;
+  icon: React.ReactNode;
+  preview: (typeof THEME_PREVIEW)[keyof typeof THEME_PREVIEW];
+  active: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={onSelect}
+      className={cn(
+        'w-44 rounded-xl border-2 p-2 text-left transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        active ? 'border-primary' : 'border-border hover:border-border-strong',
+      )}
+    >
+      <div className="flex h-20 gap-1.5 overflow-hidden rounded-lg p-1.5" style={{ backgroundColor: preview.bg }}>
+        <div className="w-7 rounded-md" style={{ backgroundColor: preview.panel }} />
+        <div className="flex flex-1 flex-col justify-end gap-1.5 rounded-md p-1.5" style={{ backgroundColor: preview.panel }}>
+          <div className="h-2 w-3/4 rounded-full" style={{ backgroundColor: preview.line }} />
+          <div className="h-2 w-1/2 self-end rounded-full" style={{ backgroundColor: preview.primary }} />
+          <div className="h-2 w-2/3 rounded-full" style={{ backgroundColor: preview.line }} />
+        </div>
+      </div>
+      <div className="mt-2 flex items-center gap-1.5 px-1 text-sm">
+        <span className={active ? 'text-primary' : 'text-muted-foreground'}>{icon}</span>
+        <span className={cn('flex-1', active ? 'font-medium text-foreground' : 'text-muted-foreground')}>{label}</span>
+        {active && <CheckIcon className="h-4 w-4 text-primary" />}
+      </div>
+    </button>
+  );
+}
+
+function AppearancePage() {
+  const theme = useAppStore(s => s.theme);
+  const setTheme = useAppStore(s => s.setTheme);
+  const fontSizeScale = useAppStore(s => s.fontSizeScale);
+  const setFontSizeScale = useAppStore(s => s.setFontSizeScale);
+  const [showDesignSystem, setShowDesignSystem] = useState(false);
+  // Drag the font size slider: shows the number right away, applies on release (changing the font size redraws the whole app)
+  const [fontDraft, setFontDraft] = useState(fontSizeScale);
+  useEffect(() => { setFontDraft(fontSizeScale); }, [fontSizeScale]);
+  const commitFont = () => { if (fontDraft !== fontSizeScale) setFontSizeScale(fontDraft); };
+  const px = (scale: number) => Math.round(16 * scale);
+
+  // UI language picker: same list and order as the TopBar flag menu (Vietnamese, English, Chinese…; partly translated
+  // ones in dev builds). The list comes from main, with coverage taken from resources/locales/index.json.
+  const { current: currentLanguage, options: languageOptions, change: changeLanguage } = useUiLanguages();
+
+  return (
+    <SettingsPage title={tr('Giao diện')} description={tr('Màu nền và cỡ chữ, áp dụng ngay.')}>
+      {languageOptions.length > 1 && (
+        <SettingsSection title={tr('Ngôn ngữ')}>
+          <SettingsRow
+            title={tr('Ngôn ngữ giao diện')}
+            description={tr('Đổi xong, giao diện tải lại.')}
+            control={
+              <Select
+                aria-label={tr('Ngôn ngữ giao diện')}
+                value={currentLanguage}
+                onChange={e => void changeLanguage(e.target.value)}
+                wrapperClassName="w-56"
+              >
+                {languageOptions.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
+              </Select>
+            }
+          />
+        </SettingsSection>
+      )}
+
+      <SettingsSection title={tr('Chủ đề')} flush bodyClassName="p-4">
+        <div role="radiogroup" aria-label={tr('Chủ đề')} className="flex flex-wrap gap-3">
+          <ThemeCard label={tr('Sáng')} icon={<SunIcon className="h-4 w-4" />} preview={THEME_PREVIEW.light}
+            active={theme === 'light'} onSelect={() => setTheme('light')} />
+          <ThemeCard label={tr('Tối')} icon={<MoonIcon className="h-4 w-4" />} preview={THEME_PREVIEW.dark}
+            active={theme === 'dark'} onSelect={() => setTheme('dark')} />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title={tr('Cỡ chữ')}>
+        <SettingsRow
+          title={`${px(fontDraft)} px`}
+          description={tr('Cỡ chữ của cả ứng dụng. Cũng chỉnh được ở thanh tiêu đề.')}
+          control={px(fontDraft) !== 16 && (
+            <Button variant="ghost" size="sm" onClick={() => { setFontDraft(1); setFontSizeScale(1); }}>{tr('Mặc định')}</Button>
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">A</span>
+            <input
+              type="range"
+              aria-label={tr('Cỡ chữ')}
+              min={FONT_SCALE_MIN}
+              max={FONT_SCALE_MAX}
+              step={FONT_SCALE_STEP}
+              value={fontDraft}
+              onChange={e => setFontDraft(Number(e.target.value))}
+              onMouseUp={commitFont}
+              onTouchEnd={commitFont}
+              onKeyUp={commitFont}
+              onBlur={commitFont}
+              className="w-64 accent-primary"
+            />
+            <span className="text-base text-muted-foreground">A</span>
+          </div>
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection>
+        <SettingsRow
+          title={tr('Bộ giao diện')}
+          description={tr('Màu và các thành phần giao diện dùng chung (cho người phát triển).')}
+          control={<Button variant="outline" size="sm" onClick={() => setShowDesignSystem(v => !v)}>{showDesignSystem ? tr('Ẩn') : tr('Xem')}</Button>}
+        >
+          {showDesignSystem ? <DesignSystemPage /> : undefined}
+        </SettingsRow>
+      </SettingsSection>
+    </SettingsPage>
+  );
+}
+
+// ─── Notifications ──────────────────────────────────────────────────────────────────────────
+
+function NotificationsPage() {
+  const accounts = useAccountStore(s => s.accounts);
+  const {
+    showNotification, notifSettings, setNotifSettings, notifSettingsOverrides, getNotifSettingsForAccount,
+    setNotifSettingsForAccount, resetNotifSettingsForAccount,
+  } = useAppStore(useShallow(s => ({
+    showNotification: s.showNotification, notifSettings: s.notifSettings, setNotifSettings: s.setNotifSettings,
+    notifSettingsOverrides: s.notifSettingsOverrides, getNotifSettingsForAccount: s.getNotifSettingsForAccount,
+    setNotifSettingsForAccount: s.setNotifSettingsForAccount, resetNotifSettingsForAccount: s.resetNotifSettingsForAccount,
+  })));
+  const [selectedNotifAccount, setSelectedNotifAccount] = useState<string>('__global__');
+
+  const isGlobal = selectedNotifAccount === '__global__';
+  const settings = isGlobal ? notifSettings : getNotifSettingsForAccount(selectedNotifAccount);
+  const saveSettings = isGlobal
+    ? setNotifSettings
+    : (partial: any) => setNotifSettingsForAccount(selectedNotifAccount, partial);
+  const hasOverride = !isGlobal && !!notifSettingsOverrides[selectedNotifAccount];
+
+
+  return (
+    <SettingsPage title={tr('Thông báo')} description={tr('Cách Deplao báo tin nhắn mới. Lưu riêng trên máy này.')}>
+      <SettingsSection
+        title={tr('Popup và âm thanh')}
+        footer={tr('Hội thoại đã tắt thông báo sẽ không báo. Không thấy popup? Bật thông báo cho Deplao trong cài đặt Windows / macOS.')}
+        action={(
+          <AccountSelect
+            aria-label={tr('Áp dụng cho tài khoản')}
+            accounts={accounts}
+            value={isGlobal ? null : selectedNotifAccount}
+            onChange={id => setSelectedNotifAccount(id ?? '__global__')}
+            allLabel={tr('Tất cả tài khoản (mặc định)')}
+            allDetail={tr('Cài đặt chung cho mọi tài khoản')}
+            note={acc => (notifSettingsOverrides[acc.zalo_id] ? tr('riêng') : null)}
+            size="sm"
+            align="end"
+            triggerClassName="w-64"
+          />
+        )}
+      >
+        {!isGlobal && (
+          <div className="flex flex-wrap items-center gap-2 py-2.5 text-xs text-muted-foreground">
+            {hasOverride ? (
+              <>
+                <span>{tr('Tài khoản này đang dùng cài đặt riêng.')}</span>
+                <Button variant="link" size="sm" className="text-xs" onClick={() => resetNotifSettingsForAccount(selectedNotifAccount)}>
+                  {tr('Dùng mặc định')}
+                </Button>
+              </>
+            ) : (
+              <span>{tr('Đang theo mặc định. Đổi bên dưới để đặt riêng cho tài khoản này.')}</span>
+            )}
+          </div>
+        )}
+        <SettingsRow
+          title={tr('Popup trên màn hình')}
+          description={tr('Hiện ở góc màn hình khi có tin mới.')}
+          control={(
+            <Switch
+              aria-label={tr('Popup trên màn hình')}
+              checked={settings.desktopEnabled}
+              onCheckedChange={(v) => {
+                if (v) requestNotificationPermission().then(granted => {
+                  if (!granted) { showNotification(tr('Máy đang chặn thông báo của Deplao. Hãy cho phép trong cài đặt hệ thống.'), 'warning'); return; }
+                  saveSettings({ desktopEnabled: true });
+                });
+                else saveSettings({ desktopEnabled: false });
+              }}
+            />
+          )}
+        />
+        <SettingsRow
+          title={tr('Âm thanh')}
+          description={tr('Phát tiếng khi có tin mới.')}
+          control={<Switch aria-label={tr('Âm thanh thông báo')} checked={settings.soundEnabled} onCheckedChange={(v) => saveSettings({ soundEnabled: v })} />}
+        >
+          {settings.soundEnabled ? (
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">{tr('Âm lượng')}</span>
+              <input type="range" min="0" max="100" step="5" aria-label={tr('Âm lượng')}
+                value={Math.round(settings.volume * 100)}
+                onChange={e => saveSettings({ volume: parseInt(e.target.value) / 100 })}
+                className="w-56 accent-primary" />
+              <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">{Math.round(settings.volume * 100)}%</span>
+            </div>
+          ) : undefined}
+        </SettingsRow>
+        <SettingsRow
+          title={tr('Thử thông báo')}
+          control={(
+            <>
+              <Button variant="outline" size="sm"
+                onClick={() => { if (settings.soundEnabled) playNotificationSound(settings.volume); else showNotification(tr('Hãy bật âm thanh trước'), 'info'); }}>
+                {tr('Âm thanh')}
+              </Button>
+              <Button variant="outline" size="sm"
+                onClick={() => {
+                  requestNotificationPermission().then(granted => {
+                    if (!granted) { showNotification(tr('Cần cấp quyền thông báo'), 'warning'); return; }
+                    showDesktopNotification('Deplao', tr('Đây là thông báo thử nghiệm 🎉'));
+                  });
+                }}>
+                {tr('Popup')}
+              </Button>
+            </>
+          )}
+        />
+      </SettingsSection>
+
+      <SettingsSection title={tr('Thông báo trong app')} description={tr('Thẻ tin nhắn mới ở góc trên bên phải khi đang dùng app.')} flush bodyClassName="p-2">
+        <InAppNotifySettings />
+      </SettingsSection>
+
+      {/* Start with the computer: after a restart you do not need to open Deplao yourself (saved per machine) */}
+      <AutoLaunchSettings />
+    </SettingsPage>
+  );
+}
+
+// ─── Storage ────────────────────────────────────────────────────────────────────────────
+
+function formatBytes(bytes: number): string {
+  return bytes > 1024 * 1024 * 1024
+    ? `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function StoragePage({
+  isEmployee, storagePath, defaultStoragePath, actualDbPath, mediaCachePath, mediaCacheSize, changing, copyProgress, copyTotal,
+  onChangeFolder, onReset,
+}: {
+  isEmployee: boolean;
+  storagePath: string;
+  defaultStoragePath: string;
+  actualDbPath: string;
+  mediaCachePath: string;
+  mediaCacheSize: number;
+  changing: boolean;
+  copyProgress: number;
+  copyTotal: number;
+  onChangeFolder: () => void;
+  onReset: () => void;
+}) {
+  if (isEmployee) {
+    // Employee machine: cache only, the original data is managed by the server
+    return (
+      <SettingsPage title={tr('Lưu trữ')} description={tr('Máy nhân viên: dữ liệu gốc nằm trên máy chủ.')}>
+        <SettingsSection title={tr('Bộ nhớ đệm trên máy này')} description={tr('Ảnh, video, file đã xem được giữ lại để lần sau mở nhanh. Tự dọn khi quá 2 GB.')}>
+          <SettingsRow
+            title={tr('Thư mục')}
+            control={mediaCachePath ? (
+              <Button variant="outline" size="sm" onClick={() => ipc.file?.openPath(mediaCachePath)} leftIcon={<FolderIcon className="h-4 w-4" />}>{tr('Mở')}</Button>
+            ) : undefined}
+          >
+            <PathText value={mediaCachePath || tr('Đang tải...')} />
+          </SettingsRow>
+          <SettingsRow
+            title={tr('Dung lượng')}
+            control={<span className="text-sm font-medium text-foreground">{mediaCacheSize > 0 ? formatBytes(mediaCacheSize) : tr('Đang tính...')}</span>}
+          />
+        </SettingsSection>
+      </SettingsPage>
+    );
+  }
+
+  // Drive C: (Windows): fills up easily, lost when Windows is reinstalled → suggest moving (no prompt if already on another drive)
+  const onSystemDrive = /^c:[\\/]/i.test(storagePath);
+  const mismatch = !!actualDbPath && !!storagePath && !actualDbPath.startsWith(storagePath);
+  const progressText = copyProgress > 0
+    ? `${copyProgress.toLocaleString()}${copyTotal > 0 ? ` / ${copyTotal.toLocaleString()}` : ''} file…`
+    : tr('Đang xử lý...');
+
+  return (
+    <SettingsPage title={tr('Lưu trữ')} description={tr('Nơi lưu tin nhắn, danh bạ, ảnh và file trên máy này.')}>
+      {onSystemDrive && (
+        <Notice tone="warning" title={tr('Nên chuyển dữ liệu khỏi ổ C:')}>
+          <p>{tr('Ổ C: hay đầy và bị xoá khi cài lại Windows. Chuyển sang ổ D:, E: hoặc ổ ngoài, dữ liệu tự chép sang.')}</p>
+        </Notice>
+      )}
+      {mismatch && (
+        <Notice tone="destructive" title={tr('Dữ liệu đang đọc ở thư mục khác')}>
+          <p>{tr('Thường do cập nhật app. Bấm "Chọn thư mục khác" và trỏ lại đúng thư mục chứa dữ liệu.')}</p>
+        </Notice>
+      )}
+
+      <SettingsSection title={tr('Thư mục dữ liệu')} description={tr('Đổi thư mục thì dữ liệu tự chép sang và dùng ngay, không cần mở lại app.')}>
+        <SettingsRow
+          title={tr('Thư mục')}
+          control={(
+            <>
+              {storagePath && storagePath !== defaultStoragePath && (
+                <Button variant="ghost" size="sm" onClick={onReset} disabled={changing}>{tr('Đặt lại mặc định')}</Button>
+              )}
+              {storagePath && (
+                <Button variant="outline" size="sm" onClick={() => ipc.file?.openPath(storagePath)} leftIcon={<FolderIcon className="h-4 w-4" />}>{tr('Mở')}</Button>
+              )}
+              <Button size="sm" onClick={onChangeFolder} disabled={changing}>
+                {changing ? progressText : tr('Chọn thư mục khác')}
+              </Button>
+            </>
+          )}
+        >
+          <PathText value={storagePath || tr('Đang tải...')} />
+          {actualDbPath && (
+            <p className="mt-1.5 truncate text-xs text-muted-foreground" title={actualDbPath}>{trx('File dữ liệu: {{actualDbPath}}', { actualDbPath })}</p>
+          )}
+        </SettingsRow>
+      </SettingsSection>
+
+      {/* Cloud media (Cloudflare R2 / Google Drive), server only, app builds with the Cloudflare module */}
+      <CloudMediaSummary />
+    </SettingsPage>
+  );
+}

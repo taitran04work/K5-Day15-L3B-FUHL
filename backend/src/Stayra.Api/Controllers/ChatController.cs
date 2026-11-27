@@ -97,7 +97,7 @@ public record LanguageRequest(string Token, string Language);
 public record OwnerReplyRequest(string Text);
 
 [Route("api/app/inbox")]
-public class InboxController(IGuestMessenger messenger, IRealtimeNotifier realtime) : OwnerControllerBase
+public class InboxController(IGuestMessenger messenger, IRealtimeNotifier realtime, DeplaoClient deplao, TimeProvider clock) : OwnerControllerBase
 {
     [HttpGet("conversations")]
     public async Task<object> List([FromQuery] string? status, [FromQuery] string? channel, [FromQuery] string? q)
@@ -199,11 +199,50 @@ public class InboxController(IGuestMessenger messenger, IRealtimeNotifier realti
 
     private async Task<Conversation> Load(Guid id) => await Db.Conversations.FirstOrDefaultAsync(c => c.Id == id) ?? throw AppException.NotFound("Conversation");
 
+    [HttpPost("sync")]
+    public async Task<object> Sync()
+    {
+        var t = await CurrentTenantAsync();
+        var deplaoConnected = deplao.IsConnected(t);
+        var onlineAccounts = 0;
+        if (deplaoConnected)
+        {
+            var apiKey = deplao.ResolveApiKey(t);
+            var baseUrl = deplao.ResolveBaseUrl(t);
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                var (ok, accounts, _) = await deplao.GetAccountsAsync(baseUrl, apiKey, HttpContext.RequestAborted);
+                if (ok) onlineAccounts = accounts.Count(a => a.Online);
+            }
+        }
+        var total = await Db.Conversations.CountAsync(c => c.Messages.Any(m => m.Role == MessageRole.Guest || m.Role == MessageRole.Owner));
+        // Per-channel breakdown so the dashboard can show each channel's activity.
+        var channelCounts = await Db.Conversations
+            .Where(c => c.Messages.Any(m => m.Role == MessageRole.Guest || m.Role == MessageRole.Owner))
+            .GroupBy(c => c.Channel)
+            .Select(g => new { Channel = g.Key, Count = g.Count() })
+            .ToListAsync();
+        var unread = await Db.Conversations.SumAsync(c => c.UnreadCount);
+        var attention = await Db.Conversations.CountAsync(c => c.NeedsAttention);
+        return new
+        {
+            syncedAt = clock.GetUtcNow(),
+            deplaoConnected,
+            zaloAccountsOnline = onlineAccounts,
+            totalConversations = total,
+            // Legacy field kept for backwards compat; prefer channelBreakdown below.
+            zaloConversations = channelCounts.FirstOrDefault(x => x.Channel == ChannelType.Zalo)?.Count ?? 0,
+            channelBreakdown = channelCounts.ToDictionary(x => x.Channel.ToString(), x => x.Count),
+            unreadCount = unread,
+            needsAttentionCount = attention,
+        };
+    }
+
     private static object Summary(Conversation c, string? bookingCode) => new
     {
         id = c.Id, channel = c.Channel.ToString(), guestName = c.GuestName, guestPhone = c.GuestPhone, status = c.Status.ToString(),
         needsAttention = c.NeedsAttention, unreadCount = c.UnreadCount, lastMessagePreview = c.LastMessagePreview, lastMessageAt = c.LastMessageAt,
-        bookingId = c.BookingId, bookingCode, language = c.Language, handoffReason = c.HandoffReason, externalUserId = c.ExternalUserId, createdAt = c.CreatedAt,
+        bookingId = c.BookingId, bookingCode, language = c.Language, handoffReason = c.HandoffReason, externalUserId = c.ExternalUserId, externalAccountId = c.ExternalAccountId, createdAt = c.CreatedAt,
     };
 
     private static JsonElement? SafeJson(string s)

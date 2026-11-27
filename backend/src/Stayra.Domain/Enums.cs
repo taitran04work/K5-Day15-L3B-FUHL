@@ -38,6 +38,6 @@ public enum RefundPolicyStatus { Draft, Active, Archived }
 public enum RefundAppliesTo { Deposit, Total }
 public enum FaqStatus { Suggested, Approved }
 
-public enum ChannelType { WebWidget, Zalo }
+public enum ChannelType { WebWidget, Zalo, Facebook, Telegram }
 public enum ConversationStatus { Bot, HumanTakeover, Closed }
 public enum MessageRole { Guest, Bot, Owner, System, Tool }

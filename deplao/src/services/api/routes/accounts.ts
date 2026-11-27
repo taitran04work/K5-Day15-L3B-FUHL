@@ -1,0 +1,231 @@
+/**
+ * Accounts group: list, status, connect/disconnect, proxy.
+ * IPC channels: login:getAccounts, login:checkHealth, login:connect, login:disconnect,
+ * fb:connect, fb:disconnect, fb:checkHealth, telegramUser:startListener, telegramUser:isConnected,
+ * proxy:getForAccount, proxy:setAccount, proxy:list.
+ */
+import { randomUUID } from 'node:crypto';
+import EventBroadcaster from '../../event/EventBroadcaster';
+import { s } from '../schema';
+import { ApiError, route, RouteDef } from '../types';
+import { accountAllowed } from '../auth/ApiAuth';
+import { CHANNELS } from '../channels/ChannelActions';
+import { accountParams, scrub } from './common';
+import { tr } from '../../../shared/i18n';
+
+const accountSchema = s.object({
+    id: s.string(), channel: s.string(), display_name: s.string(), avatar_url: s.string(), phone: s.string(),
+    online: s.boolean(), is_business: s.boolean(), listener_active: s.boolean(),
+    created_at: s.any().nullable(), last_seen: s.any().nullable(),
+});
+
+function maskProxy(p: any): any {
+    if (!p || typeof p !== 'object') return p;
+    const { password, ...rest } = p;
+    return { ...scrub(rest), has_password: !!password };
+}
+
+async function rawAccount(ctx: any, accountId: string): Promise<any> {
+    const res = await ctx.call('login:getAccounts');
+    return (res?.accounts || []).find((a: any) => String(a.zalo_id) === String(accountId)) || null;
+}
+
+interface QrSessionState {
+    status: string;
+    qrDataUrl: string;
+    message?: string;
+    accountId?: string;
+    accountName?: string;
+    updatedAt: number;
+}
+
+const qrSessions = new Map<string, QrSessionState>();
+let qrHookRegistered = false;
+
+function ensureQrHook() {
+    if (qrHookRegistered) return;
+    qrHookRegistered = true;
+    EventBroadcaster.onBeforeSend('qr:update', (data: any) => {
+        const tempId = String(data?.tempId || '');
+        if (!tempId) return;
+        const prev = qrSessions.get(tempId);
+        qrSessions.set(tempId, {
+            status: String(data?.status || prev?.status || 'waiting'),
+            qrDataUrl: data?.qrDataUrl ? String(data.qrDataUrl) : (prev?.qrDataUrl || ''),
+            message: data?.message ? String(data.message) : undefined,
+            accountId: data?.zaloId ? String(data.zaloId) : prev?.accountId,
+            accountName: data?.displayName ? String(data.displayName) : prev?.accountName,
+            updatedAt: Date.now(),
+        });
+        const cutoff = Date.now() - 15 * 60_000;
+        for (const [k, v] of qrSessions) {
+            if (v.updatedAt < cutoff) qrSessions.delete(k);
+        }
+    });
+}
+
+export function accountRoutes(): RouteDef[] {
+    ensureQrHook();
+    return [
+        route({
+            method: 'GET', path: '/accounts', scope: 'accounts:read', tags: ['Tài khoản'], operationId: 'listAccounts',
+            summary: tr('Danh sách tài khoản (Zalo, Facebook, Telegram) mà key được phép'),
+            query: s.object({
+                channel: s.enum(['zalo', 'facebook', 'telegram_user', 'telegram_bot'] as const).optional().describe(tr('Lọc theo kênh')),
+                online: s.boolean().optional().describe(tr('Chỉ tài khoản đang online')),
+            }),
+            response: s.array(accountSchema),
+            handler: async ctx => {
+                const list = await ctx.listAccounts();
+                return list
+                    .filter((a: any) => accountAllowed(ctx.principal, a.id))
+                    .filter((a: any) => !ctx.query.channel || a.channel === ctx.query.channel)
+                    .filter((a: any) => ctx.query.online === undefined || a.online === ctx.query.online);
+            },
+        }),
+        route({
+            method: 'GET', path: '/accounts/:accountId', scope: 'accounts:read', tags: ['Tài khoản'], operationId: 'getAccount',
+            summary: tr('Thông tin một tài khoản'),
+            params: accountParams,
+            response: accountSchema,
+            handler: ctx => ctx.account(ctx.params.accountId),
+        }),
+        route({
+            method: 'GET', path: '/accounts/:accountId/status', scope: 'accounts:read', tags: ['Tài khoản'], operationId: 'getAccountStatus',
+            summary: tr('Trạng thái kết nối/listener chi tiết và proxy đang dùng'),
+            params: accountParams,
+            handler: async ctx => {
+                const acc = await ctx.account(ctx.params.accountId);
+                let health: any = null;
+                try {
+                    if (acc.channel === CHANNELS.ZALO) {
+                        const res = await ctx.call('login:checkHealth', { zaloIds: [acc.id] });
+                        health = res?.results?.[0] || null;
+                    } else if (acc.channel === CHANNELS.FACEBOOK) {
+                        health = await ctx.call('fb:checkHealth', { accountId: acc.id });
+                    } else if (acc.channel === CHANNELS.TELEGRAM_USER) {
+                        health = await ctx.ipc('telegramUser:isConnected', acc.id);
+                    }
+                } catch (err: any) {
+                    health = { error: err?.message || String(err) };
+                }
+                let proxy: any = null;
+                try {
+                    const p = await ctx.call('proxy:getForAccount', { zaloId: acc.id });
+                    proxy = maskProxy(p?.proxy ?? null);
+                } catch { proxy = null; }
+                return { account: acc, health: scrub(health), proxy };
+            },
+        }),
+        route({
+            method: 'POST', path: '/accounts/:accountId/connect', scope: 'accounts:manage', tags: ['Tài khoản'], operationId: 'connectAccount',
+            summary: tr('Kết nối lại tài khoản bằng phiên đã lưu'),
+            description: tr('Dùng phiên đăng nhập đã lưu trên máy (không nhận cookie từ client). Zalo: login:connect; Facebook: fb:connect; Telegram: telegramUser:startListener.'),
+            params: accountParams,
+            handler: async ctx => {
+                const acc = await ctx.account(ctx.params.accountId);
+                if (acc.channel === CHANNELS.FACEBOOK) {
+                    const r = await ctx.call('fb:connect', { accountId: acc.id }, { timeoutMs: 120_000 });
+                    return { connected: true, listener_connected: !!r?.listenerConnected };
+                }
+                const raw = await rawAccount(ctx, acc.id);
+                if (!raw) throw new ApiError(404, 'NOT_FOUND', tr('Không tìm thấy phiên đăng nhập đã lưu'));
+                if (acc.channel === CHANNELS.TELEGRAM_USER) {
+                    if (!raw.cookies) throw new ApiError(409, 'CONFLICT', tr('Phiên Telegram không còn, cần đăng nhập lại trên app'));
+                    await ctx.call('telegramUser:startListener', { accountId: acc.id, phoneNumber: '', stringSession: raw.cookies }, { timeoutMs: 120_000 });
+                    return { connected: true };
+                }
+                if (acc.channel === CHANNELS.ZALO) {
+                    await ctx.call('login:connect', {
+                        auth: { cookies: raw.cookies || '', imei: raw.imei || '', userAgent: raw.user_agent || '' },
+                    }, { timeoutMs: 120_000 });
+                    return { connected: true };
+                }
+                throw new ApiError(422, 'CHANNEL_UNSUPPORTED', tr('Kênh {{channel}} chưa hỗ trợ kết nối qua API', { channel: acc.channel }));
+            },
+        }),
+        route({
+            method: 'POST', path: '/accounts/:accountId/disconnect', scope: 'accounts:manage', tags: ['Tài khoản'], operationId: 'disconnectAccount',
+            summary: tr('Ngắt kết nối tài khoản (giữ dữ liệu)'),
+            params: accountParams,
+            handler: async ctx => {
+                const acc = await ctx.account(ctx.params.accountId);
+                if (acc.channel === CHANNELS.FACEBOOK) await ctx.call('fb:disconnect', { accountId: acc.id });
+                else await ctx.call('login:disconnect', { zaloId: acc.id });
+                return { disconnected: true };
+            },
+        }),
+        route({
+            method: 'GET', path: '/accounts/:accountId/proxy', scope: 'accounts:manage', tags: ['Tài khoản'], operationId: 'getAccountProxy',
+            summary: tr('Proxy đang gán cho tài khoản (không trả mật khẩu)'),
+            params: accountParams,
+            handler: async ctx => {
+                await ctx.account(ctx.params.accountId);
+                const res = await ctx.call('proxy:getForAccount', { zaloId: ctx.params.accountId });
+                return maskProxy(res?.proxy ?? null);
+            },
+        }),
+        route({
+            method: 'PUT', path: '/accounts/:accountId/proxy', scope: 'accounts:manage', tags: ['Tài khoản'], operationId: 'setAccountProxy',
+            summary: tr('Gán proxy (id trong danh sách proxy) hoặc bỏ proxy (null)'),
+            params: accountParams,
+            body: s.object({ proxy_id: s.int().nullable().describe(tr('ID proxy từ GET /proxies; null = bỏ proxy')) }),
+            handler: async ctx => {
+                await ctx.account(ctx.params.accountId);
+                await ctx.call('proxy:setAccount', { zaloId: ctx.params.accountId, proxyId: ctx.body.proxy_id ?? null });
+                return { proxy_id: ctx.body.proxy_id ?? null };
+            },
+        }),
+        route({
+            method: 'GET', path: '/proxies', scope: 'accounts:manage', tags: ['Tài khoản'], operationId: 'listProxies',
+            summary: tr('Danh sách proxy đã cấu hình (không trả mật khẩu)'),
+            handler: async ctx => {
+                const res = await ctx.call('proxy:list');
+                const list = Array.isArray(res) ? res : (res?.proxies || res?.items || []);
+                return list.map(maskProxy);
+            },
+        }),
+        route({
+            method: 'POST', path: '/accounts/zalo/qr', scope: 'accounts:manage', tags: ['Tài khoản'], operationId: 'startZaloQrLogin',
+            summary: tr('Bắt đầu phiên đăng nhập Zalo bằng mã QR'),
+            body: s.object({ proxy_id: s.int().nullable().optional() }).optional(),
+            handler: async ctx => {
+                ensureQrHook();
+                const tempId = randomUUID();
+                qrSessions.set(tempId, { status: 'initializing', qrDataUrl: '', updatedAt: Date.now() });
+                const res = await ctx.call('login:qr', { tempId, proxyId: ctx.body?.proxy_id ?? null });
+                if (res && res.success === false) {
+                    throw new ApiError(500, 'QR_START_FAILED', res.error || tr('Không thể khởi tạo mã QR'));
+                }
+                return { temp_id: tempId };
+            },
+        }),
+        route({
+            method: 'GET', path: '/accounts/zalo/qr/:tempId', scope: 'accounts:read', tags: ['Tài khoản'], operationId: 'getZaloQrStatus',
+            summary: tr('Lấy mã QR và trạng thái phiên đăng nhập Zalo'),
+            params: s.object({ tempId: s.string() }),
+            handler: async ctx => {
+                const state = qrSessions.get(ctx.params.tempId);
+                if (!state) throw new ApiError(404, 'NOT_FOUND', tr('Không tìm thấy phiên QR'));
+                return {
+                    temp_id: ctx.params.tempId,
+                    status: state.status,
+                    qr_data_url: state.qrDataUrl,
+                    message: state.message ?? null,
+                    account_id: state.accountId ?? null,
+                    account_name: state.accountName ?? null,
+                };
+            },
+        }),
+        route({
+            method: 'POST', path: '/accounts/zalo/qr/:tempId/abort', scope: 'accounts:manage', tags: ['Tài khoản'], operationId: 'abortZaloQrLogin',
+            summary: tr('Hủy phiên đăng nhập Zalo bằng mã QR'),
+            params: s.object({ tempId: s.string() }),
+            handler: async ctx => {
+                await ctx.call('login:qr:abort', { tempId: ctx.params.tempId }).catch(() => {});
+                qrSessions.delete(ctx.params.tempId);
+                return { aborted: true };
+            },
+        }),
+    ];
+}

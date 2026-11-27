@@ -78,6 +78,13 @@ public class Tenant : Entity
     public string? SmtpFromName { get; set; }
     public bool SmtpEnableSsl { get; set; } = true;
 
+    // Deplao T123 (Zalo personal / multi-channel gateway, secrets encrypted at rest)
+    public string? DeplaoBaseUrl { get; set; }
+    public string? DeplaoApiKeyEnc { get; set; }
+    public string? DeplaoAccountId { get; set; }
+    public string? DeplaoWebhookId { get; set; }
+    public string? DeplaoWebhookSecretEnc { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -286,6 +293,7 @@ public class Conversation : Entity, ITenantOwned
     public Guid TenantId { get; set; }
     public ChannelType Channel { get; set; }
     public string? ExternalUserId { get; set; }
+    public string? ExternalAccountId { get; set; }
     public string? VisitorToken { get; set; }
     public string? GuestName { get; set; }
     public string? GuestPhone { get; set; }
@@ -315,6 +323,19 @@ public class Message : Entity
     public int InputTokens { get; set; }
     public int OutputTokens { get; set; }
     public string? AuthorName { get; set; }
+    public string? ExternalMessageId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public class ChannelConnection : Entity, ITenantOwned
+{
+    public Guid TenantId { get; set; }
+    public ChannelType Channel { get; set; }
+    public string AccountId { get; set; } = "";
+    public string AccountName { get; set; } = "";
+    public bool IsEnabled { get; set; } = true;
+    /// <summary>Comma-separated thread/group IDs allowed for auto-reply; null/empty = allow all.</summary>
+    public string? AllowedThreadIds { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 

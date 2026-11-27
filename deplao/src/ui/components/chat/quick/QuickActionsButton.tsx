@@ -1,0 +1,305 @@
+/**
+ * "Thao tác nhanh" (Quick actions) button next to the conversation search box: create a group (Zalo / Telegram / Messenger), join a group by link,
+ * add a friend (Zalo / Telegram), add an appointment + quick note (Task management). Telegram accounts get extra items
+ * like Telegram's own menu: New channel, Contacts, Calls.
+ * The account is picked right in the menu: normal → the open account; merged inbox → the account being filtered / open / the first
+ * of the merged inbox (rules in quickActions.ts).
+ */
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import { useAppStore } from '@/store/app/appStore';
+import { useAccountStore, type AccountInfo } from '@/store/accounts/accountStore';
+import { useVisibleAccounts } from '@/hooks/accounts/useVisibleAccounts';
+import { useQuickErpAccess } from '@/hooks/erp/useQuickErpAccess';
+import { cn } from '@/lib/cn';
+import { DropdownMenu, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from '@/components/ui';
+import {
+  ArrowLeftIcon, BookIcon, CalendarIcon, CheckIcon, ChevronDownIcon, FileTextIcon, LinkIcon, PhoneIcon, PlusIcon,
+  UserPlusIcon, UsersIcon,
+} from '@/components/common/icons';
+import { CreateGroupModal } from '../groups/GroupModals';
+import { QuickAccountAvatar } from './QuickAccountPicker';
+import QuickCreateGroupDialog from './QuickCreateGroupDialog';
+import QuickJoinLinkDialog from './QuickJoinLinkDialog';
+import QuickAddFriendDialog from './QuickAddFriendDialog';
+import { QuickEventDialog, QuickNoteDialog } from './QuickErpDialogs';
+import TelegramNewGroupDialog from '../telegram/quick/TelegramNewGroupDialog';
+import TelegramNewChannelDialog from '../telegram/quick/TelegramNewChannelDialog';
+import TelegramContactsDialog from '../telegram/quick/TelegramContactsDialog';
+import TelegramCallsDialog from '../telegram/quick/TelegramCallsDialog';
+import { MegaphoneGlyph } from '../telegram/quick/TelegramUi';
+import {
+  CHANNEL_SHORT_LABEL, accountChannel, accountLabel, defaultQuickAccountId, orderQuickAccounts, quickActionSupport, quickActionVisible,
+  type OpenQuickConversation, type QuickActionId, type QuickModeState,
+} from './quickActions';
+import { tr } from '../../../../shared/i18n';
+import { trx } from '@/lib/i18n/trx';
+
+type QuickDialog =
+  | { kind: 'createGroup' | 'createChannel' | 'addFriend' | 'contacts' | 'calls'; account: AccountInfo }
+  | { kind: 'joinLink'; accountId: string | null }
+  | { kind: 'event' | 'note' };
+
+const CREATE_GROUP_LABEL: Record<string, { title: string; hint: string }> = {
+  zalo: { title: tr('Tạo nhóm Zalo'), hint: tr('Chọn bạn bè theo nhãn, đặt tên nhóm') },
+  telegram_user: { title: tr('Nhóm mới'), hint: tr('Chọn thành viên, đặt tên + ảnh nhóm') },
+  facebook: { title: tr('Tạo nhóm Messenger'), hint: tr('Từ 2 người trở lên') },
+};
+
+const ADD_FRIEND_LABEL: Record<string, { title: string; hint: string }> = {
+  zalo: { title: tr('Thêm bạn Zalo'), hint: tr('Tìm theo số điện thoại, gửi lời mời') },
+  telegram_user: { title: tr('Thêm liên hệ Telegram'), hint: tr('Theo số điện thoại hoặc @tên người dùng') },
+};
+
+function ActionItem({ icon, title, hint, reason, onSelect }: {
+  icon: React.ReactNode;
+  title: string;
+  hint: string;
+  /** Has a reason → the item is locked, shows the reason instead of the suggestion. */
+  reason?: string | null;
+  onSelect: () => void;
+}) {
+  return (
+    <DropdownMenuItem icon={icon} disabled={!!reason} onSelect={onSelect} className="py-2">
+      <span className="block truncate text-[13px]">{title}</span>
+      {/* The lock reason wraps onto new lines (text is not cut): the user needs to read all of it */}
+      <span className={cn('block text-[11px] leading-4', reason ? 'whitespace-normal text-warning' : 'truncate text-muted-foreground')}>{reason || hint}</span>
+    </DropdownMenuItem>
+  );
+}
+
+export default function QuickActionsButton({ activeThread, onOpenConversation }: {
+  /** Open conversation: allows attaching an appointment to it. */
+  activeThread?: { id: string; name: string } | null;
+  onOpenConversation: OpenQuickConversation;
+}) {
+  const accounts = useVisibleAccounts();
+  const activeAccountId = useAccountStore(s => s.activeAccountId);
+  const { mergedInboxMode, mergedInboxAccounts, mergedInboxFilterAccount } = useAppStore(useShallow(s => ({
+    mergedInboxMode: s.mergedInboxMode,
+    mergedInboxAccounts: s.mergedInboxAccounts,
+    mergedInboxFilterAccount: s.mergedInboxFilterAccount,
+  })));
+  const erp = useQuickErpAccess();
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [view, setView] = useState<'main' | 'accounts'>('main');
+  const [dialog, setDialog] = useState<QuickDialog | null>(null);
+  // Account the user picked themselves: only kept while the context (default account) has not changed.
+  const [choice, setChoice] = useState<{ base: string | null; id: string } | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  const mode = useMemo<QuickModeState>(() => ({
+    activeAccountId, mergedInboxMode, mergedInboxAccounts, mergedInboxFilterAccount,
+  }), [activeAccountId, mergedInboxMode, mergedInboxAccounts, mergedInboxFilterAccount]);
+  const entries = useMemo(() => orderQuickAccounts(accounts, mode), [accounts, mode]);
+  const defaultId = useMemo(() => defaultQuickAccountId(accounts, mode), [accounts, mode]);
+  const selectedId = choice && choice.base === defaultId && accounts.some(a => a.zalo_id === choice.id) ? choice.id : defaultId;
+  const selected = accounts.find(a => a.zalo_id === selectedId) || null;
+  const channel = accountChannel(selected);
+
+  const supportReason = useCallback((action: QuickActionId, account: AccountInfo | null): string | null => {
+    if (!account) return tr('Chưa có tài khoản');
+    const support = quickActionSupport(action, accountChannel(account));
+    return 'reason' in support ? support.reason : null;
+  }, []);
+  const joinDisabledReason = useCallback((account: AccountInfo) => supportReason('joinLink', account), [supportReason]);
+  const canJoinAny = accounts.some(account => !supportReason('joinLink', account));
+
+  // Switching screen (account ↔ action): the item just clicked disappears → move focus to the first item so ↑/↓ keys keep working.
+  const viewChanged = useRef(false);
+  useEffect(() => {
+    if (!viewChanged.current) return;
+    viewChanged.current = false;
+    bodyRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus({ preventScroll: true });
+  }, [view]);
+  const switchView = (next: 'main' | 'accounts') => { viewChanged.current = true; setView(next); };
+
+  const open = (next: QuickDialog) => setDialog(next);
+  const close = () => setDialog(null);
+
+  if (accounts.length === 0 && !erp.event && !erp.note) return null;
+
+  const createReason = supportReason('createGroup', selected);
+  const createLabel = CREATE_GROUP_LABEL[channel] || { title: tr('Tạo nhóm'), hint: '' };
+  const friendReason = supportReason('addFriend', selected);
+  const friendLabel = ADD_FRIEND_LABEL[channel] || { title: tr('Thêm bạn'), hint: '' };
+  const hasMergedSection = entries.some(entry => entry.inMerged);
+
+  return (
+    <>
+      <DropdownMenu
+        open={menuOpen}
+        onOpenChange={next => { setMenuOpen(next); if (!next) setView('main'); }}
+        align="end"
+        className="w-72 p-1.5"
+        trigger={(
+          <button type="button" title={tr('Tạo nhóm / kênh, tham gia nhóm, thêm bạn, danh bạ, cuộc gọi, lịch hẹn, ghi chú')} aria-label={tr('Thao tác nhanh')}
+            className={cn(
+              'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+              menuOpen && 'bg-muted text-foreground',
+            )}>
+            <PlusIcon className="h-[18px] w-[18px]" />
+          </button>
+        )}
+      >
+        <div ref={bodyRef}>
+          {view === 'accounts' ? (
+            <>
+              <DropdownMenuItem icon={<ArrowLeftIcon />} onClick={e => { e.preventDefault(); switchView('main'); }}>
+                <span className="text-[13px] font-medium">{tr('Chọn tài khoản thao tác')}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <div className="max-h-72 overflow-y-auto">
+                {entries.map((entry, index) => {
+                  const account = entry.account;
+                  const active = account.zalo_id === selectedId;
+                  const showMergedHeader = hasMergedSection && index === 0 && entry.inMerged;
+                  const showOthersHeader = hasMergedSection && !entry.inMerged && (index === 0 || entries[index - 1].inMerged);
+                  return (
+                    <React.Fragment key={account.zalo_id}>
+                      {showMergedHeader && <DropdownMenuLabel className="py-1 text-[10px] uppercase tracking-wide">{tr('Trang gộp')}</DropdownMenuLabel>}
+                      {showOthersHeader && <DropdownMenuLabel className="py-1 text-[10px] uppercase tracking-wide">{tr('Tài khoản khác')}</DropdownMenuLabel>}
+                      <DropdownMenuItem
+                        aria-current={active || undefined}
+                        className={cn(active && 'bg-selected')}
+                        onClick={e => {
+                          e.preventDefault();
+                          setChoice({ base: defaultId, id: account.zalo_id });
+                          switchView('main');
+                        }}>
+                        <span className="flex items-center gap-2.5">
+                          <QuickAccountAvatar account={account} size={26} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px]">{accountLabel(account)}</span>
+                            <span className="block truncate text-[11px] text-muted-foreground">
+                              {CHANNEL_SHORT_LABEL[accountChannel(account)] || accountChannel(account)}
+                              {entry.isActive && tr(' · đang mở')}
+                            </span>
+                          </span>
+                          {active && <CheckIcon className="h-4 w-4 shrink-0 text-primary" />}
+                        </span>
+                      </DropdownMenuItem>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <>
+              {selected && (
+                <>
+                  <DropdownMenuLabel className="pb-1 pt-1 text-[10px] uppercase tracking-wide">{tr('Thao tác bằng tài khoản')}</DropdownMenuLabel>
+                  {accounts.length > 1 ? (
+                    <DropdownMenuItem className="py-1.5" onClick={e => { e.preventDefault(); switchView('accounts'); }}>
+                      <span className="flex items-center gap-2.5">
+                        <QuickAccountAvatar account={selected} size={28} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium">{accountLabel(selected)}</span>
+                          <span className="block truncate text-[11px] text-muted-foreground">
+                            {CHANNEL_SHORT_LABEL[channel] || channel}
+                            {selected.zalo_id === activeAccountId ? tr(' · đang mở') : ''}
+                          </span>
+                        </span>
+                        <span className="flex shrink-0 items-center gap-0.5 text-[11px] text-primary">
+                          {trx('Đổi<0/>', { 0: <ChevronDownIcon className="h-3.5 w-3.5 -rotate-90" /> })}
+                        </span>
+                      </span>
+                    </DropdownMenuItem>
+                  ) : (
+                    <div className="flex items-center gap-2.5 px-2 py-1.5">
+                      <QuickAccountAvatar account={selected} size={28} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium">{accountLabel(selected)}</span>
+                        <span className="block truncate text-[11px] text-muted-foreground">{CHANNEL_SHORT_LABEL[channel] || channel}</span>
+                      </span>
+                    </div>
+                  )}
+                  <DropdownMenuSeparator />
+                </>
+              )}
+
+              {accounts.length > 0 && (
+                <>
+                  <ActionItem icon={<UsersIcon />} title={createLabel.title} hint={createLabel.hint} reason={createReason}
+                    onSelect={() => { if (selected) open({ kind: 'createGroup', account: selected }); }} />
+                  {selected && quickActionVisible('createChannel', channel) && (
+                    <ActionItem icon={<MegaphoneGlyph />} title={tr('Kênh mới')} hint={tr('Phát tin tới nhiều người theo dõi')}
+                      reason={supportReason('createChannel', selected)}
+                      onSelect={() => open({ kind: 'createChannel', account: selected })} />
+                  )}
+                  <ActionItem icon={<LinkIcon />} title={tr('Tham gia nhóm bằng link')} hint={tr('Dán link Zalo / Telegram, tự chọn tài khoản')}
+                    reason={canJoinAny ? null : tr('Cần tài khoản Zalo hoặc Telegram')}
+                    onSelect={() => open({ kind: 'joinLink', accountId: selected && !supportReason('joinLink', selected) ? selected.zalo_id : null })} />
+                  <ActionItem icon={<UserPlusIcon />} title={friendLabel.title} hint={friendLabel.hint} reason={friendReason}
+                    onSelect={() => { if (selected) open({ kind: 'addFriend', account: selected }); }} />
+                  {selected && (quickActionVisible('contacts', channel) || quickActionVisible('calls', channel)) && (
+                    <>
+                      <DropdownMenuSeparator />
+                      {quickActionVisible('contacts', channel) && (
+                        <ActionItem icon={<BookIcon />} title={tr('Danh bạ')} hint={tr('Liên hệ Telegram · trạng thái, nhắn tin')}
+                          reason={supportReason('contacts', selected)} onSelect={() => open({ kind: 'contacts', account: selected })} />
+                      )}
+                      {quickActionVisible('calls', channel) && (
+                        <ActionItem icon={<PhoneIcon />} title={tr('Cuộc gọi')} hint={tr('Lịch sử cuộc gọi, gọi nhỡ')}
+                          reason={supportReason('calls', selected)} onSelect={() => open({ kind: 'calls', account: selected })} />
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+
+              {(erp.event || erp.note) && (
+                <>
+                  {accounts.length > 0 && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel className="pb-1 pt-1 text-[10px] uppercase tracking-wide">{tr('Công việc của tôi')}</DropdownMenuLabel>
+                  {erp.event && (
+                    <ActionItem icon={<CalendarIcon />} title={tr('Thêm lịch hẹn')}
+                      hint={activeThread ? tr('Có thể gắn với hội thoại đang mở') : tr('Hẹn gọi lại, gặp khách… có nhắc trước')}
+                      onSelect={() => open({ kind: 'event' })} />
+                  )}
+                  {erp.note && (
+                    <ActionItem icon={<FileTextIcon />} title={tr('Ghi chú nhanh')} hint={tr('Lưu vào Ghi chú trong Quản lý công việc')}
+                      onSelect={() => open({ kind: 'note' })} />
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </DropdownMenu>
+
+      {dialog?.kind === 'createGroup' && (accountChannel(dialog.account) === 'zalo' ? (
+        <CreateGroupModal
+          accountId={dialog.account.zalo_id}
+          onClose={close}
+          onCreated={(groupId, name) => {
+            if (groupId) onOpenConversation(dialog.account.zalo_id, groupId, 1, { display_name: name, channel: 'zalo' });
+          }}
+        />
+      ) : accountChannel(dialog.account) === 'telegram_user' ? (
+        <TelegramNewGroupDialog account={dialog.account} onClose={close} onOpenConversation={onOpenConversation} />
+      ) : (
+        <QuickCreateGroupDialog account={dialog.account} onClose={close} onOpenConversation={onOpenConversation} />
+      ))}
+      {dialog?.kind === 'createChannel' && (
+        <TelegramNewChannelDialog account={dialog.account} onClose={close} onOpenConversation={onOpenConversation} />
+      )}
+      {dialog?.kind === 'contacts' && (
+        <TelegramContactsDialog account={dialog.account} onClose={close} onOpenConversation={onOpenConversation} />
+      )}
+      {dialog?.kind === 'calls' && (
+        <TelegramCallsDialog account={dialog.account} onClose={close} onOpenConversation={onOpenConversation} />
+      )}
+      {dialog?.kind === 'joinLink' && (
+        <QuickJoinLinkDialog entries={entries} initialAccountId={dialog.accountId} disabledReason={joinDisabledReason}
+          onClose={close} onOpenConversation={onOpenConversation} />
+      )}
+      {dialog?.kind === 'addFriend' && (
+        <QuickAddFriendDialog account={dialog.account} onClose={close} onOpenConversation={onOpenConversation} />
+      )}
+      {dialog?.kind === 'event' && <QuickEventDialog activeThread={activeThread} onClose={close} />}
+      {dialog?.kind === 'note' && <QuickNoteDialog onClose={close} />}
+    </>
+  );
+}

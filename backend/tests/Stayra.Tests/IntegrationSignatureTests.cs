@@ -98,6 +98,44 @@ public class ZaloSignatureTests
     }
 }
 
+public class DeplaoSignatureTests
+{
+    private class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    [Fact]
+    public void Verify_accepts_valid_v1_hmac_and_rejects_tampering_or_stale_timestamp()
+    {
+        var now = DateTimeOffset.FromUnixTimeSeconds(1760412345);
+        var clock = new FixedClock(now);
+        var body = System.Text.Encoding.UTF8.GetBytes("{\"type\":\"message.received\",\"channel\":\"zalo\"}");
+        var ts = "1760412345";
+        var sig = DeplaoSignature.Compute("whsec_test", ts, body);
+
+        sig.Should().StartWith("v1=");
+        DeplaoSignature.Verify(sig, ts, body, "whsec_test", clock).Should().BeTrue();
+        DeplaoSignature.Verify(sig.ToUpperInvariant(), ts, body, "whsec_test", clock).Should().BeTrue();
+        DeplaoSignature.Verify(sig, ts, body, "wrong_secret", clock).Should().BeFalse();
+        DeplaoSignature.Verify(sig, ts, System.Text.Encoding.UTF8.GetBytes("{}"), "whsec_test", clock).Should().BeFalse();
+        // Stale timestamp (> 300s skew)
+        DeplaoSignature.Verify(sig, "1760411000", body, "whsec_test", clock).Should().BeFalse();
+        DeplaoSignature.Verify(null, ts, body, "whsec_test", clock).Should().BeFalse();
+    }
+
+    [Fact]
+    public void MapChannel_supports_zalo_facebook_and_telegram()
+    {
+        DeplaoClient.MapChannel("zalo").Should().Be(Stayra.Domain.ChannelType.Zalo);
+        DeplaoClient.MapChannel("facebook").Should().Be(Stayra.Domain.ChannelType.Facebook);
+        DeplaoClient.MapChannel("messenger").Should().Be(Stayra.Domain.ChannelType.Facebook);
+        DeplaoClient.MapChannel("telegram").Should().Be(Stayra.Domain.ChannelType.Telegram);
+        DeplaoClient.MapChannel("telegram_bot").Should().Be(Stayra.Domain.ChannelType.Telegram);
+        DeplaoClient.MapChannel("unknown").Should().BeNull();
+    }
+}
+
 public class PolicyExtractionTests
 {
     [Fact]

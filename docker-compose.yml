@@ -13,7 +13,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U stayra -d stayra"]
+      test: [ "CMD-SHELL", "pg_isready -U stayra -d stayra" ]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -54,6 +54,11 @@ services:
       Smtp__FromAddress: ${SMTP_FROM_ADDRESS:-}
       Smtp__FromName: ${SMTP_FROM_NAME:-Stayra}
       Smtp__WebBaseUrl: ${WEB_BASE_URL:-http://localhost:5173}
+      Deplao__DefaultBaseUrl: ${DEPLAO_BASE_URL:-http://deplao:27800/api/v1}
+      Deplao__WebhookBaseUrl: ${DEPLAO_WEBHOOK_BASE_URL:-http://api:8080}
+      Deplao__WebPassword: ${DEPLAO_WEB_PASSWORD:-stayra-deplao-local-1234}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
     volumes:
@@ -69,11 +74,30 @@ services:
     ports:
       - "5173:80"
 
+  deplao:
+    build:
+      context: ./deplao
+      dockerfile: ../docker/deplao.Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DEPLAO_WEB: 1
+      DEPLAO_CHANNELS_ONLY: 1
+      DEPLAO_WEB_PASSWORD: ${DEPLAO_WEB_PASSWORD:-stayra-deplao-local-1234}
+      DEPLAO_WEB_PORT: 27800
+      DEPLAO_WEB_HOST: 0.0.0.0
+      DEPLAO_WEB_SECURE: 0
+      DEPLAO_ALLOW_PRIVATE_URLS: 1
+    ports:
+      - "27800:27800"
+    volumes:
+      - deplao_data:/root/.config/Deplao
+
   # Optional: expose the API publicly so MoMo IPN and Zalo webhooks can reach it.
   #   docker compose --profile tunnel up
   ngrok:
     image: ngrok/ngrok:latest
-    profiles: ["tunnel"]
+    profiles: [ "tunnel" ]
     command: http api:8080
     environment:
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
@@ -85,3 +109,4 @@ services:
 volumes:
   pgdata:
   uploads:
+  deplao_data:

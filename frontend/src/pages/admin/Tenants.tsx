@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { Copy, ExternalLink, Eye, EyeOff, MapPin, Plus, Users, Wand2 } from "lucide-react"
+import { Copy, ExternalLink, Eye, EyeOff, MapPin, Plus, Users, Wand2, Webhook } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -259,6 +259,22 @@ export default function Tenants() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["admin-tenants"] }),
     onError: (e) => toast.error(errorMessage(e)),
   })
+  const platformChannels = useQuery({
+    queryKey: ["admin-channels"],
+    queryFn: () =>
+      api.get<{
+        gatewayUrl: string
+        configured: boolean
+        webhookUrl: string
+        accounts: { id: string; channel: string; name: string; online: boolean }[]
+        connections: { id: string; tenantName: string; channel: string; accountId: string; accountName: string; isEnabled: boolean }[]
+      }>("/api/admin/channels"),
+  })
+  const registerGlobalWebhook = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; message: string }>("/api/admin/channels/register-webhook"),
+    onSuccess: (r) => (r.ok ? toast.success(r.message) : toast.error(r.message)),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
   return (
     <Page>
       <PageHeader
@@ -322,6 +338,35 @@ export default function Tenants() {
         </div>
       )}
       <p className="mt-3 text-xs text-muted-foreground">{t("admin.last30")}</p>
+      {platformChannels.data && (
+        <div className="mt-6 rounded-xl border p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Deplao Gateway (Platform Multi-tenant)</h2>
+              <p className="text-xs text-muted-foreground">
+                {platformChannels.data.configured
+                  ? `${platformChannels.data.gatewayUrl} · ${platformChannels.data.accounts.length} tài khoản trên Deplao · ${platformChannels.data.connections.length} kết nối đang gắn cho homestay`
+                  : "Chưa cấu hình Deplao__ApiKey ở tầng platform."}
+              </p>
+            </div>
+            {platformChannels.data.configured && (
+              <Button size="sm" variant="outline" onClick={() => registerGlobalWebhook.mutate()} disabled={registerGlobalWebhook.isPending}>
+                {registerGlobalWebhook.isPending ? <Spinner /> : <Webhook className="mr-1.5 size-4" />}
+                Đăng ký Webhook chung
+              </Button>
+            )}
+          </div>
+          {platformChannels.data.connections.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {platformChannels.data.connections.map((c) => (
+                <span key={c.id} className={cn("rounded-md border px-2.5 py-1 text-xs", !c.isEnabled && "opacity-50")}>
+                  <strong>{c.tenantName}</strong> · {c.channel}: {c.accountName}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <CreateTenantSheet open={open} onOpenChange={setOpen} />
     </Page>
   )
