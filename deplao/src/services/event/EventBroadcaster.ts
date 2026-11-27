@@ -1722,8 +1722,8 @@ class EventBroadcaster {
     /**
      * Broadcast QR code update (`message`: the text for the user when status = 'error')
      */
-    public static broadcastQRUpdate(tempId: string, qrDataUrl: string, status: string, message?: string): void {
-        this.send('qr:update', { tempId, qrDataUrl, status, ...(message ? { message } : {}) });
+    public static broadcastQRUpdate(tempId: string, qrDataUrl: string, status: string, message?: string, extra?: { zaloId?: string; displayName?: string }): void {
+        this.send('qr:update', { tempId, qrDataUrl, status, ...(message ? { message } : {}), ...(extra || {}) });
     }
 
     /**

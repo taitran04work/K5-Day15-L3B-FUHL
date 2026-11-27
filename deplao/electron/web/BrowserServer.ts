@@ -108,7 +108,7 @@ export async function startBrowserServer(options: BrowserServerOptions) {
         try { tenantSlug = String(JSON.parse(raw || '{}').tenantSlug || 'tenant').slice(0, 60); } catch { }
         const created = ApiKeyService.getInstance().create({
           name: `Stayra-${tenantSlug}`,
-          scopes: ['accounts:read', 'chat:read', 'chat:send', 'contacts:read', 'webhooks:manage'],
+          scopes: ['accounts:read', 'accounts:manage', 'chat:read', 'chat:send', 'contacts:read', 'webhooks:manage'],
           createdBy: 'stayra',
         });
         json(res, 200, { apiKey: created.key, keyId: created.record.id });

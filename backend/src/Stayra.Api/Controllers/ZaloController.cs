@@ -214,16 +214,95 @@ public class DeplaoChannelsController(
         // show a warning when the gateway isn't ready yet.
         var provisioned = await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted);
         var connections = await Db.ChannelConnections.OrderBy(c => c.CreatedAt).ToListAsync();
-        var view = View(t, connections);
-        // Annotate with provision status only when not already connected
-        // (avoids noise when the key was already stored).
+        var provisionStatus = deplaoClient.IsConnected(t) ? "ok"
+                            : provisioned ? "ok"
+                            : (string.IsNullOrWhiteSpace(deplaoClient.ResolveApiKey(t)) ? "not_configured" : "failed");
+        return View(t, connections, provisionStatus);
+    }
+
+    [HttpPost("zalo/qr")]
+    public async Task<object> StartZaloQr()
+    {
+        var t = await CurrentTenantAsync();
+        await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted);
+        var res = await deplaoClient.StartZaloQrAsync(t, HttpContext.RequestAborted);
+        if (res.Forbidden)
+        {
+            t.DeplaoApiKeyEnc = null;
+            await Db.SaveChangesAsync();
+            await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted);
+            res = await deplaoClient.StartZaloQrAsync(t, HttpContext.RequestAborted);
+        }
+        if (!res.Ok || string.IsNullOrWhiteSpace(res.TempId))
+            throw AppException.BadRequest("qr_start_failed", res.Error ?? "Could not start Zalo QR login.");
+        return new { tempId = res.TempId };
+    }
+
+    [HttpGet("zalo/qr/{tempId}")]
+    public async Task<object> GetZaloQrStatus(string tempId)
+    {
+        var t = await CurrentTenantAsync();
+        var res = await deplaoClient.GetZaloQrStatusAsync(t, tempId, HttpContext.RequestAborted);
+        if (!res.Ok)
+            throw AppException.BadRequest("qr_status_failed", res.Error ?? "Could not fetch QR status.");
+
+        if (res.Status == "success" && !string.IsNullOrWhiteSpace(res.AccountId))
+        {
+            var accId = res.AccountId.Trim();
+            var claimedByOther = await Db.ChannelConnections.IgnoreQueryFilters()
+                .AnyAsync(c => c.Channel == ChannelType.Zalo && c.AccountId == accId && c.TenantId != t.Id);
+            if (claimedByOther)
+            {
+                return new
+                {
+                    tempId,
+                    status = "error",
+                    qrDataUrl = "",
+                    message = "Tài khoản Zalo này đã được kết nối với một homestay khác.",
+                    accountId = (string?)null,
+                    accountName = (string?)null,
+                };
+            }
+
+            var existing = await Db.ChannelConnections.FirstOrDefaultAsync(c => c.Channel == ChannelType.Zalo && c.AccountId == accId);
+            if (existing == null)
+            {
+                Db.ChannelConnections.Add(new ChannelConnection
+                {
+                    TenantId = t.Id,
+                    Channel = ChannelType.Zalo,
+                    AccountId = accId,
+                    AccountName = string.IsNullOrWhiteSpace(res.AccountName) ? accId : res.AccountName.Trim(),
+                    IsEnabled = true,
+                });
+            }
+            else
+            {
+                existing.AccountName = string.IsNullOrWhiteSpace(res.AccountName) ? existing.AccountName : res.AccountName.Trim();
+                existing.IsEnabled = true;
+            }
+            if (string.IsNullOrWhiteSpace(t.DeplaoAccountId))
+                t.DeplaoAccountId = accId;
+            await Db.SaveChangesAsync();
+        }
+
         return new
         {
-            provisionStatus = deplaoClient.IsConnected(t) ? "ok"
-                            : provisioned ? "ok"
-                            : (string.IsNullOrWhiteSpace(deplaoClient.ResolveApiKey(t)) ? "not_configured" : "failed"),
-            status = view,
+            tempId,
+            status = res.Status,
+            qrDataUrl = res.QrDataUrl ?? "",
+            message = res.Message,
+            accountId = res.AccountId,
+            accountName = res.AccountName,
         };
+    }
+
+    [HttpPost("zalo/qr/{tempId}/abort")]
+    public async Task<object> AbortZaloQr(string tempId)
+    {
+        var t = await CurrentTenantAsync();
+        await deplaoClient.AbortZaloQrAsync(t, tempId, HttpContext.RequestAborted);
+        return new { aborted = true };
     }
 
     [HttpPost("connections")]
@@ -408,8 +487,9 @@ public class DeplaoChannelsController(
         return $"{apiBase}/api/channels/deplao/{t.Slug}/webhook";
     }
 
-    private object View(Tenant t, List<ChannelConnection> connections) => new
+    private object View(Tenant t, List<ChannelConnection> connections, string? provisionStatus = null) => new
     {
+        provisionStatus,
         connected = deplaoClient.IsConnected(t),
         platformManaged = deplaoClient.HasPlatformGateway,
         configured = !string.IsNullOrEmpty(t.DeplaoApiKeyEnc) || deplaoClient.HasPlatformGateway,

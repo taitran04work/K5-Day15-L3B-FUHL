@@ -223,7 +223,10 @@ class ZaloLoginHelper {
         }
 
         // 5. Broadcast success AFTER saving + connecting + fetching the phone
-        EventBroadcaster.broadcastQRUpdate(tempId, '', 'success');
+        EventBroadcaster.broadcastQRUpdate(tempId, '', 'success', undefined, {
+            zaloId,
+            displayName: account.displayName || '',
+        });
         Logger.log(`[ZaloLoginHelper] QR Login success: ${zaloId}`);
 
         // 6. Callback after a successful QR login

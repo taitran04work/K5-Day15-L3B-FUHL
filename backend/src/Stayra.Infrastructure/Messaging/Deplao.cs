@@ -296,6 +296,81 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
         }
     }
 
+    public async Task<(bool Ok, string? TempId, bool Forbidden, string? Error)> StartZaloQrAsync(Tenant t, CancellationToken ct = default)
+    {
+        var apiKey = ResolveApiKey(t);
+        if (string.IsNullOrWhiteSpace(apiKey)) return (false, null, false, "Deplao API key is not configured.");
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{ResolveBaseUrl(t)}/accounts/zalo/qr")
+            {
+                Content = JsonContent.Create(new { }),
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            var resp = await http.SendAsync(req, ct);
+            var raw = await resp.Content.ReadAsStringAsync(ct);
+            if ((int)resp.StatusCode == 403) return (false, null, true, raw);
+            if (!resp.IsSuccessStatusCode) return (false, null, false, $"HTTP {(int)resp.StatusCode}: {raw}");
+            var json = JsonSerializer.Deserialize<JsonElement>(raw);
+            var payload = json.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d : json;
+            return (true, Str(payload, "temp_id"), false, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "StartZaloQrAsync failed");
+            return (false, null, false, ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, string Status, string? QrDataUrl, string? Message, string? AccountId, string? AccountName, string? Error)> GetZaloQrStatusAsync(Tenant t, string tempId, CancellationToken ct = default)
+    {
+        var apiKey = ResolveApiKey(t);
+        if (string.IsNullOrWhiteSpace(apiKey)) return (false, "error", null, null, null, null, "Deplao API key is not configured.");
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{ResolveBaseUrl(t)}/accounts/zalo/qr/{Uri.EscapeDataString(tempId)}");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            var resp = await http.SendAsync(req, ct);
+            var raw = await resp.Content.ReadAsStringAsync(ct);
+            if (!resp.IsSuccessStatusCode) return (false, "error", null, null, null, null, $"HTTP {(int)resp.StatusCode}: {raw}");
+            var json = JsonSerializer.Deserialize<JsonElement>(raw);
+            var payload = json.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d : json;
+            return (
+                true,
+                Str(payload, "status") ?? "waiting",
+                Str(payload, "qr_data_url"),
+                Str(payload, "message"),
+                Str(payload, "account_id"),
+                Str(payload, "account_name"),
+                null
+            );
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "GetZaloQrStatusAsync failed");
+            return (false, "error", null, null, null, null, ex.Message);
+        }
+    }
+
+    public async Task AbortZaloQrAsync(Tenant t, string tempId, CancellationToken ct = default)
+    {
+        var apiKey = ResolveApiKey(t);
+        if (string.IsNullOrWhiteSpace(apiKey)) return;
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{ResolveBaseUrl(t)}/accounts/zalo/qr/{Uri.EscapeDataString(tempId)}/abort")
+            {
+                Content = JsonContent.Create(new { }),
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            await http.SendAsync(req, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogDebug(ex, "AbortZaloQrAsync failed");
+        }
+    }
+
     private static string? Str(JsonElement el, string prop) =>
         el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }

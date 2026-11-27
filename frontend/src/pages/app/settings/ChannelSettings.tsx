@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Link } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -68,12 +68,69 @@ export default function ChannelSettings() {
   const [dForm, setDForm] = useState({ baseUrl: "", apiKey: "", webhookSecret: "" })
   const [dTest, setDTest] = useState({ conversationId: "", text: "" })
   const [accounts, setAccounts] = useState<DeplaoAccount[]>([])
-  const [deplaoModalOpen, setDeplaoModalOpen] = useState(false)
+  const [qrModalOpen, setQrModalOpen] = useState(false)
+  const [qrTempId, setQrTempId] = useState<string | null>(null)
+  const [qrState, setQrState] = useState<{ status: string; qrDataUrl: string; message?: string | null }>({ status: "idle", qrDataUrl: "" })
   const [oaForm, setOaForm] = useState({ appId: "", appSecret: "", oaId: "", oaSecretKey: "", accessToken: "", refreshToken: "" })
 
   const d = deplao.data
   const connections = d?.connections ?? []
   const s = zalo.data
+
+  const startZaloQr = useMutation({
+    mutationFn: () => api.post<{ tempId: string }>("/api/app/channels/deplao/zalo/qr"),
+    onSuccess: (r) => {
+      setQrTempId(r.tempId)
+      setQrState({ status: "initializing", qrDataUrl: "" })
+    },
+    onError: (e) => {
+      setQrState({ status: "error", qrDataUrl: "", message: errorMessage(e) })
+    },
+  })
+
+  useEffect(() => {
+    if (!qrModalOpen || !qrTempId) return
+    if (["success", "error", "expired", "declined"].includes(qrState.status)) return
+
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await api.get<{
+          tempId: string
+          status: string
+          qrDataUrl: string
+          message?: string | null
+          accountId?: string | null
+          accountName?: string | null
+        }>(`/api/app/channels/deplao/zalo/qr/${qrTempId}`)
+        setQrState({ status: res.status, qrDataUrl: res.qrDataUrl, message: res.message })
+        if (res.status === "success") {
+          toast.success(`Đã kết nối Zalo${res.accountName ? `: ${res.accountName}` : ""}`)
+          setQrTempId(null)
+          setQrModalOpen(false)
+          void qc.invalidateQueries({ queryKey: ["deplao"] })
+        }
+      } catch (e) {
+        setQrState({ status: "error", qrDataUrl: "", message: errorMessage(e) })
+      }
+    }, 1500)
+
+    return () => window.clearInterval(timer)
+  }, [qrModalOpen, qrTempId, qrState.status, qc, errorMessage])
+
+  const openQrModal = () => {
+    setQrModalOpen(true)
+    setQrTempId(null)
+    setQrState({ status: "initializing", qrDataUrl: "" })
+    startZaloQr.mutate()
+  }
+
+  const closeQrModal = (open: boolean) => {
+    setQrModalOpen(open)
+    if (!open && qrTempId && !["success", "error", "expired", "declined"].includes(qrState.status)) {
+      void api.post(`/api/app/channels/deplao/zalo/qr/${qrTempId}/abort`).catch(() => {})
+    }
+    if (!open) setQrTempId(null)
+  }
 
   const loadAccounts = useMutation({
     mutationFn: () =>
@@ -172,9 +229,9 @@ export default function ChannelSettings() {
               description={d.connected ? "Các kết nối được lưu riêng theo từng homestay trong cơ sở dữ liệu." : "Cần cấu hình Gateway Deplao hoặc biến môi trường Deplao__ApiKey."}
               actions={
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => setDeplaoModalOpen(true)}>
+                  <Button size="sm" onClick={openQrModal}>
                     <QrCode className="mr-1.5 size-3.5" />
-                    Đăng nhập tài khoản mới
+                    Kết nối Zalo (Quét QR)
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => loadAccounts.mutate()} disabled={loadAccounts.isPending}>
                     {loadAccounts.isPending ? <Spinner /> : <RefreshCw className="size-3.5" />}
@@ -314,8 +371,8 @@ export default function ChannelSettings() {
             <div className="rounded-xl border p-5 text-sm">
               <p className="font-medium">Kết nối nhanh với Deplao T123</p>
               <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-muted-foreground">
-                <li>Bấm &ldquo;Đăng nhập tài khoản mới&rdquo; để quét QR Zalo hoặc đăng nhập Facebook / Telegram.</li>
-                <li>Đóng cửa sổ hoặc bấm &ldquo;{t("channels.deplaoLoadAccounts")}&rdquo; để chọn tài khoản cho homestay.</li>
+                <li>Bấm &ldquo;Kết nối Zalo (Quét QR)&rdquo; để quét mã trực tiếp bằng điện thoại.</li>
+                <li>Tài khoản sau khi quét sẽ tự động được gắn vào workspace homestay này.</li>
                 <li>Mọi tin nhắn từ các kênh đều đi vào cùng AI Agent &amp; Hộp thư.</li>
               </ol>
             </div>
@@ -334,28 +391,50 @@ export default function ChannelSettings() {
         </div>
       )}
 
-      <Dialog
-        open={deplaoModalOpen}
-        onOpenChange={(open) => {
-          setDeplaoModalOpen(open)
-          if (!open && d?.connected) loadAccounts.mutate()
-        }}
-      >
-        <DialogContent className="flex h-[85vh] flex-col gap-3 sm:max-w-5xl">
-          <DialogHeader className="flex-row items-center justify-between space-y-0 pr-8">
-            <div>
-              <DialogTitle>Đăng nhập tài khoản Social (Deplao T123)</DialogTitle>
-              <DialogDescription>
-                Quét mã QR Zalo hoặc đăng nhập Facebook / Telegram, sau đó đóng cửa sổ này để tải lại danh sách nick.
-              </DialogDescription>
-            </div>
-            <Button asChild variant="outline" size="sm">
-              <a href="/deplao/" target="_blank" rel="noreferrer">
-                Mở tab mới <ExternalLink className="ml-1.5 size-3.5" />
-              </a>
-            </Button>
+      <Dialog open={qrModalOpen} onOpenChange={closeQrModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Kết nối tài khoản Zalo</DialogTitle>
+            <DialogDescription>
+              Mở ứng dụng Zalo trên điện thoại và quét mã QR bên dưới để kết nối vào workspace homestay này.
+            </DialogDescription>
           </DialogHeader>
-          <iframe src="/deplao/" title="Deplao Web" className="w-full flex-1 rounded-md border bg-background" />
+          <div className="flex flex-col items-center justify-center gap-4 py-4">
+            {qrState.status === "initializing" && (
+              <div className="flex flex-col items-center gap-2 py-8 text-sm text-muted-foreground">
+                <Spinner />
+                <span>Đang khởi tạo mã QR Zalo...</span>
+              </div>
+            )}
+            {qrState.status === "waiting" && qrState.qrDataUrl && (
+              <>
+                <img src={qrState.qrDataUrl} alt="Zalo QR" className="size-56 rounded-xl border bg-white p-2 shadow-sm" />
+                <p className="text-center text-xs text-muted-foreground">Đang chờ bạn quét mã QR trên điện thoại...</p>
+              </>
+            )}
+            {qrState.status === "scanned" && (
+              <div className="flex flex-col items-center gap-2 py-8 text-center">
+                <Spinner />
+                <p className="text-sm font-medium">Đã quét mã QR!</p>
+                <p className="text-xs text-muted-foreground">Vui lòng bấm &ldquo;Đăng nhập&rdquo; trên điện thoại để hoàn tất.</p>
+              </div>
+            )}
+            {(qrState.status === "error" || qrState.status === "expired" || qrState.status === "declined") && (
+              <div className="flex flex-col items-center gap-3 py-6 text-center">
+                <p className="text-sm text-destructive">
+                  {qrState.message ||
+                    (qrState.status === "expired"
+                      ? "Mã QR đã hết hạn."
+                      : qrState.status === "declined"
+                        ? "Bạn đã từ chối đăng nhập trên điện thoại."
+                        : "Không thể đăng nhập Zalo.")}
+                </p>
+                <Button size="sm" onClick={openQrModal} disabled={startZaloQr.isPending}>
+                  {startZaloQr.isPending && <Spinner />} Tạo lại mã QR
+                </Button>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </Page>
