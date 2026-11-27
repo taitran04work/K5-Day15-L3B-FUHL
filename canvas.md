@@ -1,16 +1,15 @@
-# Canvas — [tên nhóm] · Track [A–F]
+# Canvas — FUHL · Track C (Du lịch)
 
-> Điền ở guide bước 1.4. CP1 17:00 Thứ Sáu 27/11: nộp bản đầu, đủ 7 dòng (dòng 4 được ghi giả thuyết + nguồn sẽ kiểm).
-> CP2 19:30 Thứ Sáu 27/11: cập nhật (số bằng chứng đầu, lát cắt đã chốt) và điền dòng "Đã đổi gì so với CP1".
-> Track F: chép thêm thẻ đề của nhóm (khung trong file track F) xuống dưới bảng này.
 
-| # | Dòng | Nhóm điền |
-|---|---|---|
-| 1 | Track + lát cắt dự kiến | |
-| 2 | Người dùng chính (một vai cụ thể — không phải "học viên nói chung") | |
-| 3 | Pain một câu: ai — đang làm gì — vướng đâu — hậu quả | |
-| 4 | Bằng chứng đầu — CP1: giả thuyết + nguồn sẽ kiểm · CP2: số đầu tiên + 1 trích dẫn | |
-| 5 | **Lát cắt MỘT CÂU** (1 người dùng · 1 việc · 1 quyết định AI · 1 kết quả) | |
-| 6 | AI tự làm đến đâu + 1 dòng lý do: sai thì ai chịu gì | |
-| 7 | Phân công có tên | |
-| — | *(CP2)* Đã đổi gì so với CP1 | |
+| #   | Dòng                                         | Nhóm điền                                                                                                                                                                                                                                                                                                                                                                            |
+| --- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | Track + lát cắt dự kiến                      | **C — Du lịch.** Khách đặt mới một phòng theo đêm trong chatbot Stayra, từ lúc nhắn nhu cầu đến lúc nhận xác nhận giữ phòng và thẻ đặt cọc. Luồng chính demo trên web, Zalo có thể dùng để minh họa cùng quy trình.                                                                                                                                                                  |
+| 2   | Người dùng chính                             | Khách du lịch đã chọn một homestay và muốn đặt một phòng cho chuyến đi của mình.                                                                                                                                                                                                                                                                                                     |
+| 3   | Pain một câu                                 | Khách muốn chốt phòng qua tin nhắn phải chờ chủ homestay kiểm tra lịch và giá rồi trao đổi thêm về ngày ở, số khách và tiền cọc, nên mất thời gian mới biết có giữ được phòng hay không.                                                                                                                                                                                             |
+| 4   | Bằng chứng đầu                               | **CP1.** Hỏi ít nhất 3 khách ngoài nhóm từng đặt homestay qua chat về lần đặt gần nhất. Ghi số người phải chờ hoặc hỏi lại, thời gian từ tin đầu đến lúc nhận xác nhận giữ phòng và một câu trích đã ẩn danh. <br> **CP2.** Pine Hill có 6 phòng trong dữ liệu demo để thử luồng tra lịch và báo giá. Kịch bản demo dùng câu “I'd like a room for 2 people from \[…\] for 2 nights”. |
+| 5   | **Lát cắt MỘT CÂU**                          | Khi khách nhắn để đặt một phòng homestay theo đêm, chatbot quyết định bước tiếp theo dựa trên thông tin khách cung cấp và kết quả tra lịch, giá, để khách nhận mã giữ phòng và thẻ đặt cọc sau khi xác nhận bản tóm tắt.                                                                                                                                                             |
+| 6   | AI tự làm đến đâu và ai chịu hậu quả nếu sai | Chatbot hỏi thông tin còn thiếu, tra phòng và giá qua công cụ rồi tóm tắt lựa chọn. Khách xác nhận bản tóm tắt trước khi luồng tạo lượt giữ phòng, sau đó tự thanh toán cọc qua MoMo. Sai ngày, phòng hoặc giá có thể khiến khách chốt nhầm và chủ mất lượt bán phòng. Backend kiểm lịch khi tạo lượt giữ phòng.                                                                     |
+| 7   | Phân công có tên                             | Trần Hữu Tài - tạo github repo, xây base<br>Nguyễn Thành Công - làm chatbot trên web<br>Nguyễn Ngọc Bách - kết nối chat đa nền tảng<br>Đồng Văn Quyến - hoàn thiện doc cp1, hoàn thiện survey khảo sát                                                                                                                                                                               |
+| —   | *(CP2)* Đã đổi gì so với CP1                 |                                                                                                                                                                                                                                                                                                                                                                                      |
+
+

@@ -1,11 +1,13 @@
 > Đây là khung repo nộp bài. Điền mọi chỗ `____`, giữ nguyên tên các mục. **Mục 0 xoá đi sau khi tạo repo xong.**
 > Giờ, mốc, luật, rubric: xem `README.md`, `02-guide.md`, `03-rubric.md` trong repo đề (bộ đề BTC phát).
 
-# [Tên nhóm] — [Tên lát cắt]
+# FUHL — Đặt phòng homestay qua chatbot Stayra
 
 **Thành viên, lớp, track:** xem [TEAMS.md](TEAMS.md). **Điền TEAMS.md đúng format**: khi chấm và đánh giá, BTC quét file này để ghép điểm cho từng người.
 
-*Lát cắt = phần nhỏ nhất làm xong được trong hackathon: một người dùng · một việc · một quyết định AI · một kết quả.*
+Khách nhắn nhu cầu ở theo đêm, chọn phòng còn trống, xem giá và xác nhận bản tóm tắt. Stayra giữ phòng và gửi thẻ đặt cọc để khách tự thanh toán. Chat báo xác nhận đặt phòng sau khi hệ thống ghi nhận cọc. [Canvas](canvas.md) · [Đặc tả](spec.md)
+
+**Demo chatbot.** Chạy `docker compose up --build`, mở `http://localhost:5173/h/pine-hill` và vào cửa sổ chat. Mục 4 trong tài liệu demo hướng dẫn thử từ tin nhắn đầu đến mã giữ phòng và thẻ cọc, gồm cả chế độ ngoại tuyến. Các lệnh Python bên dưới là khung nộp bài, hiện chưa gọi luồng chat .NET. [Kịch bản demo](docs/DEMO.md)
 
 ---
 

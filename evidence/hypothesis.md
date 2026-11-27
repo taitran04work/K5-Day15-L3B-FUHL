@@ -1,11 +1,8 @@
-# Giả thuyết — viết TRƯỚC khi tìm bằng chứng (5 phút, commit ngay)
+# Giả thuyết — khách đặt homestay qua chat
 
-> Điền ở guide bước 1.1. Ôn lại: ngày 2 · lab ngày 2.
-> Viết **trước** khi đọc dòng data đầu tiên hay hỏi người đầu tiên, để không sửa cho khớp kết quả. Kết quả ngược giả thuyết vẫn đủ điểm nếu số là thật.
-
-- Ngày giờ viết: __
-- Người dùng chính (một vai cụ thể): __
-- **Mình nghĩ:** [ai] gặp khó khi [việc] vì [lý do], hậu quả là [mất gì].
-- **Có thể còn cách giải thích khác:** __
-- **Mình đúng nếu thấy:** [một con số nhóm tự chọn] — vd "≥2/3 người kể được một lần như thế trong 1 tháng qua" hoặc "≥x/N học viên bỏ ở bước này" *(ví dụ)*
-- **Nguồn sẽ dùng** (≥1 nguồn đạt ngưỡng, guide 1.2): [ ] đào data · [ ] phỏng vấn ≥3 · [ ] khảo sát ≥20 — nguồn chính: __ · nguồn để kiểm lại: __
+- **Ngày lập giả thuyết.** 27/11/2026.
+- **Người dùng chính.** Khách du lịch đã chọn một homestay và từng đặt phòng theo đêm qua tin nhắn.
+- **Mình nghĩ.** Việc phải chờ chủ tra lịch, báo giá hoặc hỏi lại làm khách chậm nhận được xác nhận giữ phòng.
+- **Giải thích khác cần kiểm.** Thời gian chờ có thể đến từ việc khách đổi kế hoạch, hỏi nhiều nơi để so giá hoặc chưa muốn đặt cọc.
+- **Tín hiệu kiểm.** Mốc đề xuất là ít nhất 2 trong 3 khách ngoài nhóm mô tả được một lần đặt gần đây mà họ phải nhắn lại hoặc chờ phản hồi của chủ trước khi biết phòng đã được giữ.
+- **Nguồn chính.** Phỏng vấn ít nhất 3 khách ngoài nhóm. Hỏi theo lần đặt gần nhất và ghi kênh chat, các bước, số tin nhắn hỏi lại, thời gian từ tin đầu đến xác nhận, cùng một câu trích đã ẩn danh. Đối chiếu mốc thời gian với đoạn chat đã ẩn danh nếu người tham gia đồng ý chia sẻ. [Mẫu phỏng vấn](interviews/TEMPLATE.md) · [Hồ sơ bằng chứng](summary.md)

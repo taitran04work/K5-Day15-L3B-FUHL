@@ -36,9 +36,11 @@
 
 ## 4. Guest books through chat and pays the deposit (75 s), guest tab
 
+The hackathon slice runs through the first part of step 4, when the guest receives the hold code and deposit card. The rest of the section shows the optional payment and inbox demo. See the [canvas](../canvas.md).
+
 1. Open the round chat button. Tap **Show me the rooms**: room cards appear.
 2. Type: *"I'd like a room for 2 people from <a Friday 2+ weeks away> for 2 nights"*. The assistant checks availability and quotes exact prices, with weekend pricing applied.
-3. Answer its questions: room, full name, phone `0912 345 678`. It shows a summary; reply **"Confirm"**.
+3. Choose an available room and enter demo contact details. Reply **“Skip”** if prompted for an optional email. Check the room, dates, guest count, total and deposit in the summary, then reply **“Confirm”**.
 4. A booking summary card and a payment card ("Pay deposit …") appear. Click **Pay with MoMo** to open the real sandbox page, or **Simulate payment** in the card.
 5. The card turns to *Paid*, and a system message confirms booking `STR-XXXXXX`.
 6. In the **Owner → Inbox** tab the same conversation updated live, with tool calls shown as small "Checked availability" rows. Click **Take over**, reply as the host, then **Hand back to assistant**.
