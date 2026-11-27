@@ -9,7 +9,7 @@ Defaults chosen where the brief left room, and the places where the build delibe
 
 ## AI
 
-- **Model: `claude-sonnet-5-5`**, configurable with `ANTHROPIC_MODEL`. The brief named `claude-sonnet-4-5`, but that model retires on 2026-11-30, days after this build. Sonnet 5.5 is its direct successor.
+- **Model: `claude-haiku-5-5`**, configurable with `ANTHROPIC_MODEL`. The brief named `claude-haiku-4-5`, but that model retires on 2026-11-30, days after this build. haiku 5.5 is its direct successor.
 - **Concierge calls:** no `temperature` (current models reject it) and `effort: low` for chat latency. Thinking blocks are passed back unchanged within a turn's tool loop. Across turns only the visible text is replayed. A `refusal` stop reason hands the conversation to the owner.
 - **Policy extraction** uses structured outputs (`output_config.format` with a JSON schema) rather than forced tool use. Current models reject forced `tool_choice`.
 - **Offline mode.** No AI key is available in this environment, so:

@@ -127,7 +127,7 @@ const en = {
     failedTitle: "Payment not completed", failedDescription: "The payment was cancelled or didn't go through. You can try again from your booking.", viewBooking: "View booking",
   },
   chat: {
-    open: "Chat with us", close: "Close chat", title: "Chat with {{name}}", subtitle: "Replies instantly, day and night", typing: "Typing",
+    open: "Chat with us", close: "Close chat", title: "Chat with {{name}}", subtitle: "Replies instantly, day and night", hostJoined: "Host has joined the chat", typing: "Typing",
     welcome: "Hi, welcome to {{name}}. I can check availability, book a room, or answer questions about your stay.",
     placeholder: "Write a message…", send: "Send", disclaimer: "Automated assistant. The host can join at any time.", connectError: "We couldn't start the chat.",
     sendError: "Your message wasn't sent. Please try again.", tooLong: "Messages can be up to 2,000 characters.",
