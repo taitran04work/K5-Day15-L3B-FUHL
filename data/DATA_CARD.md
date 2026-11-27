@@ -1,17 +1,20 @@
-# Data card — dữ liệu bản chạy thử dùng
+# Data card — đặt phòng homestay qua chatbot
 
-> Dữ liệu chạy thử của lát cắt **AI Concierge trên Web cho chủ hộ homestay** lưu trong [homestay_data.json](homestay_data.json). Không chứa dữ liệu cá nhân thật của khách hàng.
+## Dataset 1 · Dữ liệu demo Stayra & bản trích JSON cho `codebase/`
 
-## Dataset 1 · Dữ liệu cơ sở, phòng, quy tắc giá & nội quy Pine Hill Homestay
-
-| | |
+| Mục | Mô tả |
 |---|---|
-| Dùng để làm gì | Nguồn sự thật cho các công cụ tra cứu trong `codebase/tools.py` (`search_policy`, `list_rooms`, `check_availability`, `quote_cancellation`, `find_booking`) và bộ câu thử `eval/benchmark.csv` |
-| Từ đâu | Trích xuất trực tiếp từ dữ liệu mẫu (seed) của hệ thống `Stayra`: `backend/src/Stayra.Infrastructure/Persistence/DatabaseSetup.cs` và tài liệu nội quy `backend/src/Stayra.Infrastructure/Persistence/SeedPdf.cs` |
-| Xử lý những bước gì | Chuyển cấu trúc C# & nội dung PDF thành JSON chuẩn hóa tiếng Việt (`policy_sections` CS-01..CS-07, `faqs` FAQ-01..FAQ-04, 6 hạng phòng PH-LOFT..PH-CAB, quy tắc giá cuối tuần +20% / Tết / theo giờ, 3 mức hoàn tiền) |
-| Số dòng / số đoạn | 6 hạng phòng · 7 mục nội quy (`CS-01`..`CS-07`) · 4 FAQ · 3 quy tắc hoàn tiền · 3 đơn đặt phòng mẫu ẩn danh |
-| Phiên bản / ngày lấy | 2026-11-27 |
-| Nhãn | `synthetic` (dữ liệu seed mô phỏng chuẩn của hệ thống, không có PII thật) |
-| Giới hạn | Dữ liệu đơn đặt phòng mẫu chỉ có 3 đơn giả lập (`STR-7K3Q9P`, `STR-8M4P2X`, `STR-9P5R3T`) dùng để kiểm tra tra cứu/tính hoàn tiền/phát hiện trùng lịch; khi chạy trên web thật (`Stayra`), công cụ truy vấn trực tiếp PostgreSQL theo từng `TenantId`. |
+| Dùng để làm gì | Kiểm tra đề xuất phòng, tra lịch, báo giá, tiền cọc, hoàn tiền, nội quy và giữ phòng qua chatbot trên cả `Stayra` (.NET/Postgres) và lát cắt Python (`codebase/tools.py`: `search_policy`, `list_rooms`, `check_availability`, `find_booking`, `quote_cancellation`). |
+| Nguồn và phiên bản | Seed trong repo: `Pine Hill` là cơ sở demo chính (6 phòng + file nội quy `SeedPdf.cs`), `Sea Breeze` là cơ sở demo thứ hai (4 phòng). Bản JSON độc lập cho Python lưu tại [homestay_data.json](homestay_data.json) (ngày trích: 2026-11-27). [Mã tạo seed](../backend/src/Stayra.Infrastructure/Persistence/DatabaseSetup.cs) · [Seed PDF](../backend/src/Stayra.Infrastructure/Persistence/SeedPdf.cs) |
+| Quy mô | 2 homestay và 10 phòng trong seed Postgres (6 phòng Pine Hill, 4 phòng Sea Breeze); file `homestay_data.json` gồm 6 hạng phòng Pine Hill (`PH-LOFT`..`PH-CAB`), 7 mục nội quy (`CS-01`..`CS-07`), 4 FAQ (`FAQ-01`..`FAQ-04`), 3 quy tắc hoàn tiền và 3 đơn đặt phòng mẫu ẩn danh (`STR-7K3Q9P`, `STR-8M4P2X`, `STR-9P5R3T`). |
+| Xử lý | Seed nạp phòng, sức chứa, quy tắc giá (cuối tuần +20%, Tết 2027, theo giờ) và chính sách hủy vào Postgres; bản JSON chuyển hóa trực tiếp các cấu trúc này sang tiếng Việt chuẩn hóa để công cụ Python tra cứu độc lập, không dùng PII thật. |
+| Nhãn | `synthetic`. Tên phòng, lịch mẫu, số điện thoại thử nghiệm (`0912345678`, `0987654321`, `0903456789`) và giao dịch demo chỉ phục vụ thử kỹ thuật. |
+| Giới hạn | Lịch đặt phòng phụ thuộc dữ liệu seed; 3 đơn mẫu trong `homestay_data.json` chỉ dùng để kiểm tra tra cứu/hoàn tiền/phát hiện trùng lịch trong bộ eval offline. Dữ liệu hội thoại khách thật trên production chưa được thu vào repo. |
 
-**Data `synthetic` (dữ liệu đặt phòng giả lập):** 3 mã đặt phòng sử dụng tên giả và số điện thoại thử nghiệm (`0912345678`, `0987654321`, `0903456789`) do nhóm kiểm tra thủ công toàn bộ số tiền (tính theo công thức `PricingEngine`: làm tròn đến 1.000 ₫, +20% đêm thứ Sáu & thứ Bảy, cọc 30%).
+## Dataset 2 · Kịch bản thử hội thoại đặt phòng (`S01`–`S09`)
+
+Có 9 kịch bản viết tay từ `S01` đến `S09` trong [spec.md](../spec.md) §5, bao phủ phòng trống, thiếu thông tin, sửa yêu cầu, chuyển chủ nhà, phòng vừa hết, giữ phòng, trạng thái chờ đặt cọc và 2 ca tấn công. Chạy với thông tin liên hệ giả lập khi test end-to-end trên web và Zalo simulator.
+
+## Dataset 3 · Bộ câu thử tự động (`eval/benchmark.csv`)
+
+Gồm **24 câu thử** (`B01`–`B24`: `thuong` 12 · `kho` 8 · `tu_choi` 4 gồm 2 ca prompt injection `B23`, `B24`), trong đó 9/24 câu (37,5%) lấy trực tiếp từ nút gợi ý `ChatWidget` và dữ liệu/test của hệ thống (`data_that`), 15 câu còn lại tự biên soạn (`tu_viet`). Đã chạy đánh giá thật 2 lượt với `claude-haiku-5-5` tại [eval/run-1.csv](../eval/run-1.csv) và [eval/run-2.csv](../eval/run-2.csv).

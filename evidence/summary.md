@@ -1,5 +1,7 @@
 # Tổng hợp bằng chứng pain
 
+**Lát cắt.** Đặt mới một phòng homestay qua chatbot đến khi khách nhận mã giữ phòng và thẻ đặt cọc. Đang chuẩn bị kiểm giả thuyết khách phải chờ khi chủ tra lịch và báo giá. Repo hiện có dữ liệu và kịch bản demo. Bằng chứng về hành vi khách thật chờ thu thập từ các lần đặt gần đây. [Canvas](../canvas.md) · [Kế hoạch phỏng vấn](hypothesis.md)
+
 > Điền ở guide bước 1.2, xong trước **CP3 10:00 Thứ Bảy 28/11**. Chấm ở rubric R1.
 > Ba nguồn ngang nhau — tối thiểu **≥1 nguồn đạt ngưỡng**. Mạnh nhất: đào data ra insight → hỏi người dùng để kiểm lại (hoặc ngược lại).
 
