@@ -72,6 +72,7 @@ export default function ChannelSettings() {
   const [oaForm, setOaForm] = useState({ appId: "", appSecret: "", oaId: "", oaSecretKey: "", accessToken: "", refreshToken: "" })
 
   const d = deplao.data
+  const connections = d?.connections ?? []
   const s = zalo.data
 
   const loadAccounts = useMutation({
@@ -183,13 +184,13 @@ export default function ChannelSettings() {
               }
             >
               <div className="space-y-4">
-                {d.connections.length === 0 ? (
+                {connections.length === 0 ? (
                   <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
                     Chưa có kênh nào được gắn cho homestay này. Bấm &ldquo;{t("channels.deplaoLoadAccounts")}&rdquo; để chọn tài khoản từ Deplao.
                   </p>
                 ) : (
                   <ul className="divide-y rounded-lg border">
-                    {d.connections.map((c) => (
+                    {connections.map((c) => (
                       <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-3">
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium">
@@ -218,7 +219,7 @@ export default function ChannelSettings() {
                     <p className="text-xs font-medium text-muted-foreground">Tài khoản đang có trên Deplao T123:</p>
                     <div className="flex flex-wrap gap-2">
                       {accounts.map((acc) => {
-                        const already = d.connections.some((c) => c.accountId === acc.id)
+                        const already = connections.some((c) => c.accountId === acc.id)
                         return (
                           <Button
                             key={acc.id}
