@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Domain\\Stayra.Domain.csproj": {}
+    "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Domain\\Stayra.Domain.csproj": {}
   },
   "projects": {
-    "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Domain\\Stayra.Domain.csproj": {
+    "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Domain\\Stayra.Domain.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Domain\\Stayra.Domain.csproj",
+        "projectUniqueName": "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Domain\\Stayra.Domain.csproj",
         "projectName": "Stayra.Domain",
-        "projectPath": "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Domain\\Stayra.Domain.csproj",
+        "projectPath": "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Domain\\Stayra.Domain.csproj",
         "packagesPath": "C:\\Users\\OS\\.nuget\\packages\\",
-        "outputPath": "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Domain\\obj\\",
+        "outputPath": "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Domain\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\OS\\AppData\\Roaming\\NuGet\\NuGet.Config"

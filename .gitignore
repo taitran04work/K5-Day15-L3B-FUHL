@@ -35,3 +35,34 @@ evidence/**/raw-*
 # Nguyên file data BTC cấp (data/preclass, data/training-ops… của repo đề): để ở đây, không commit
 data-btc
 data-btc/
+
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+backend/src/Stayra.Api/data/
+TestResults/
+
+# Node
+node_modules/
+dist/
+.vite/
+frontend/playwright-report/
+frontend/test-results/
+
+# Env & secrets
+.env
+.env.local
+*.local.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Screenshots generated during review
+docs/screenshots/tmp/

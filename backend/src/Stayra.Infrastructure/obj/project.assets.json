@@ -3293,11 +3293,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Infrastructure\\Stayra.Infrastructure.csproj",
+      "projectUniqueName": "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Infrastructure\\Stayra.Infrastructure.csproj",
       "projectName": "Stayra.Infrastructure",
-      "projectPath": "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Infrastructure\\Stayra.Infrastructure.csproj",
+      "projectPath": "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Infrastructure\\Stayra.Infrastructure.csproj",
       "packagesPath": "C:\\Users\\OS\\.nuget\\packages\\",
-      "outputPath": "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Infrastructure\\obj\\",
+      "outputPath": "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Infrastructure\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\OS\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -3313,8 +3313,8 @@
           "framework": "net10.0",
           "targetAlias": "net10.0",
           "projectReferences": {
-            "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Application\\Stayra.Application.csproj": {
-              "projectPath": "D:\\AIThucChienVin\\hackathon-Stayra\\k5-day15-l3b-fuhl\\backend\\src\\Stayra.Application\\Stayra.Application.csproj"
+            "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Application\\Stayra.Application.csproj": {
+              "projectPath": "D:\\AIThucChienVin\\hackathon-Stayra\\K5-Day15-L3B-FUHL\\backend\\src\\Stayra.Application\\Stayra.Application.csproj"
             }
           }
         }
