@@ -1,0 +1,416 @@
+/**
+ * PollView: shared poll UI used by ChatWindow (PollBubble) and GroupBoardPanel (PollBoardCard)
+ *
+ * Logic:
+ * - pendingIds = null → nothing touched yet, shows serverVotedIds from the API
+ * - Clicking an option toggles it → pendingIds is set, toggling is free
+ * - isDirty → shows the "Lưu bình chọn" (Save vote) / "Huỷ bình chọn" (Cancel vote) buttons
+ * - After save → onRefresh() and pendingIds resets to null
+ */
+import React from 'react';
+import { Spinner } from '@/components/common/PageLoading';
+import ipc from '@/lib/ipc';
+import { tr } from '../../../../shared/i18n';
+import { trx } from '@/lib/i18n/trx';
+
+export interface PollDetailData {
+  creator: string;
+  question: string;
+  options: PollOptionData[];
+  closed: boolean;
+  poll_id?: number;
+  allow_multi_choices: boolean;
+  allow_add_new_option: boolean;
+  is_anonymous: boolean;
+  expired_time: number;
+  num_vote: number;
+  joined?: boolean;
+}
+
+export interface PollOptionData {
+  content: string;
+  votes: number;
+  voted: boolean;
+  voters: string[];
+  option_id: number;
+}
+
+interface Props {
+  detail: PollDetailData;
+  /** ID of the account in use, to check whether it has voted */
+  activeAccountId: string;
+  pollId: string;
+  /** Function that gets the auth token */
+  getAuth: () => Promise<{ cookies: string; imei: string; userAgent: string }>;
+  /** Called after a successful vote / lock to reload the detail */
+  onRefresh: () => void;
+  /** Theme color: 'blue' (messages I sent) | 'dark' (default) */
+  theme?: 'blue' | 'dark';
+  /** Show voter avatars (needs the contacts list) */
+  contacts?: any[];
+  /** Show the Lock poll button if the user is the creator */
+  showLockButton?: boolean;
+  /** Show the Add option button */
+  showAddOption?: boolean;
+  onNotify?: (msg: string, type?: 'success' | 'error') => void;
+}
+
+// ─── VoterMiniAvatar ──────────────────────────────────────────────────────────
+
+function VoterMiniAvatar({ uid, contacts, theme }: { uid: string; contacts: any[]; theme: 'blue' | 'dark' }) {
+  const c = contacts.find((x: any) => String(x.contact_id) === String(uid));
+  const name: string = c?.alias || c?.display_name || '';
+  const avatar: string = c?.avatar_url || '';
+  const initials = name ? name.charAt(0).toUpperCase() : String(uid).slice(-2);
+
+  if (avatar) {
+    return (
+      <img src={avatar} alt={name} title={name || uid}
+        className="w-5 h-5 rounded-full object-cover border border-border flex-shrink-0"
+        onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+      />
+    );
+  }
+  return (
+    <div title={name || uid}
+      className={`w-5 h-5 rounded-full border flex items-center justify-center text-[8px] text-white font-bold flex-shrink-0 ${
+        theme === 'blue' ? 'bg-blue-800 border-blue-600' : 'bg-purple-700 border-border'
+      }`}
+    >
+      {initials}
+    </div>
+  );
+}
+
+// ─── VoterListModal ───────────────────────────────────────────────────────────
+
+export function VoterListModal({ option, contacts, onClose }: {
+  option: PollOptionData;
+  contacts: any[];
+  onClose: () => void;
+}) {
+  const voters = option.voters || [];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-72 max-h-96 flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+          <div className="flex-1 min-w-0 pr-2">
+            <p className="text-sm font-semibold text-foreground truncate">{option.content}</p>
+            <p className="text-xs text-muted-foreground">{trx('{{count}} người bình chọn', { count: voters.length })}</p>
+          </div>
+          <button onClick={onClose}
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div className="overflow-y-auto flex-1">
+          {voters.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-6">{tr('Chưa có ai bình chọn')}</p>
+          ) : voters.map(uid => {
+            const c = contacts.find((x: any) => String(x.contact_id) === String(uid));
+            const name: string = c?.alias || c?.display_name || '';
+            const avatar: string = c?.avatar_url || '';
+            const initials = name ? name.charAt(0).toUpperCase() : String(uid).slice(-2);
+            return (
+              <div key={uid} className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/50 transition-colors">
+                {avatar ? (
+                  <img src={avatar} alt={name} className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                    onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-purple-700 flex items-center justify-center text-xs text-white font-bold flex-shrink-0">
+                    {initials}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-foreground truncate">{name || uid}</p>
+                  {name && <p className="text-[11px] text-muted-foreground truncate">{uid}</p>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── PollDetailView (shared) ──────────────────────────────────────────────────
+
+export function PollDetailView({
+  detail,
+  activeAccountId,
+  pollId,
+  getAuth,
+  onRefresh,
+  theme = 'dark',
+  contacts = [],
+  showLockButton = false,
+  showAddOption = false,
+  onNotify,
+}: Props) {
+  const options = detail.options || [];
+  const numVote = detail.num_vote || 0;
+  const allowMulti = !!detail.allow_multi_choices;
+  const allowAddNew = !!detail.allow_add_new_option;
+  const isAnon = !!detail.is_anonymous;
+  const isClosed = !!detail.closed;
+  const isExpired = detail.expired_time > 0 && detail.expired_time * 1000 < Date.now();
+  const canVote = !isClosed && !isExpired;
+  const isCreator = String(detail.creator || '') === String(activeAccountId);
+
+  // IDs already voted, from the server
+  const serverVotedIds: number[] = options
+    .filter(o => o.voted || (o.voters || []).some(v => String(v) === String(activeAccountId)))
+    .map(o => o.option_id);
+
+  // pendingIds = null → unchanged, use serverVotedIds for display
+  const [pendingIds, setPendingIds] = React.useState<number[] | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const [locking, setLocking] = React.useState(false);
+  const [newOptionText, setNewOptionText] = React.useState('');
+  const [addingOption, setAddingOption] = React.useState(false);
+  const [voterListOpt, setVoterListOpt] = React.useState<PollOptionData | null>(null);
+
+  // Reset pendingIds when the detail reloads (pollId changes or after save)
+  const prevPollIdRef = React.useRef(pollId);
+  React.useEffect(() => {
+    if (prevPollIdRef.current !== pollId) {
+      prevPollIdRef.current = pollId;
+      setPendingIds(null);
+    }
+  }, [pollId]);
+
+  const currentIds: number[] = pendingIds !== null ? pendingIds : serverVotedIds;
+
+  const isDirty = pendingIds !== null && (
+    pendingIds.length !== serverVotedIds.length ||
+    pendingIds.some(id => !serverVotedIds.includes(id))
+  );
+
+  const toggleOption = (optId: number) => {
+    if (!canVote) return;
+    const base = pendingIds !== null ? pendingIds : [...serverVotedIds];
+    if (allowMulti) {
+      setPendingIds(base.includes(optId) ? base.filter(id => id !== optId) : [...base, optId]);
+    } else {
+      setPendingIds(base.includes(optId) ? [] : [optId]);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!isDirty || saving) return;
+    setSaving(true);
+    try {
+      const auth = await getAuth();
+      const res = await ipc.zalo?.doVotePoll?.({
+        auth, pollId: Number(pollId), optionIds: pendingIds!,
+      });
+      if (res?.success !== false) {
+        onNotify?.(pendingIds!.length === 0 ? tr('Đã huỷ bình chọn') : tr('Đã lưu bình chọn'), 'success');
+        setPendingIds(null);
+        setTimeout(onRefresh, 400);
+      } else {
+        onNotify?.(tr('Lưu bình chọn thất bại'), 'error');
+      }
+    } catch { onNotify?.(tr('Lỗi khi lưu bình chọn'), 'error'); }
+    finally { setSaving(false); }
+  };
+
+  const handleLock = async () => {
+    if (locking || !isCreator) return;
+    setLocking(true);
+    try {
+      const auth = await getAuth();
+      const res = await ipc.zalo?.lockPoll({ auth, pollId: Number(pollId) });
+      if (res?.success !== false) {
+        onNotify?.(tr('Đã khoá bình chọn'), 'success');
+        setTimeout(onRefresh, 400);
+      } else {
+        onNotify?.(tr('Khoá bình chọn thất bại'), 'error');
+      }
+    } catch { onNotify?.(tr('Lỗi khi khoá bình chọn'), 'error'); }
+    finally { setLocking(false); }
+  };
+
+  const handleAddOption = async () => {
+    const text = newOptionText.trim();
+    if (!text || addingOption) return;
+    setAddingOption(true);
+    try {
+      const auth = await getAuth();
+      const res = await ipc.zalo?.addPollOption?.({ auth, pollId: Number(pollId), option: text });
+      if (res?.success !== false) {
+        onNotify?.(tr('Đã thêm lựa chọn'), 'success');
+        setNewOptionText('');
+        setTimeout(onRefresh, 400);
+      } else {
+        onNotify?.(tr('Thêm lựa chọn thất bại'), 'error');
+      }
+    } catch { onNotify?.(tr('Lỗi khi thêm lựa chọn'), 'error'); }
+    finally { setAddingOption(false); }
+  };
+
+  const t = theme;
+  const clr = {
+    border: t === 'blue' ? 'border-blue-500' : 'border-input',
+    text: t === 'blue' ? 'text-foreground' : 'text-foreground',
+    subtext: t === 'blue' ? 'text-blue-200' : 'text-muted-foreground',
+    voteCount: t === 'blue' ? 'text-blue-200' : 'text-blue-400',
+    optChecked: t === 'blue' ? 'bg-blue-400/40 border border-blue-300' : 'bg-blue-600/30 border border-blue-500',
+    optUnchecked: t === 'blue' ? 'bg-blue-700/40 hover:bg-blue-700/60 border border-transparent' : 'bg-accent/50 hover:bg-accent border border-transparent',
+    radio: t === 'blue' ? 'border-blue-300' : 'border-border-strong',
+    bar: t === 'blue' ? 'bg-blue-800' : 'bg-accent',
+    barVoted: t === 'blue' ? 'bg-blue-200' : 'bg-blue-400',
+    barOther: t === 'blue' ? 'bg-blue-400' : 'bg-purple-500',
+    saveBtn: t === 'blue' ? 'bg-white text-blue-600 hover:bg-blue-50' : 'bg-blue-600 hover:bg-blue-700 text-white',
+    inputBorder: t === 'blue' ? 'border-blue-400 text-foreground placeholder-blue-300 focus:border-blue-200' : 'border-input text-foreground placeholder-subtle-foreground focus:border-blue-500',
+    addBtn: t === 'blue' ? 'bg-blue-400 hover:bg-blue-300 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white',
+    lockBtn: t === 'blue' ? 'bg-blue-800 hover:bg-blue-900 text-blue-200' : 'bg-accent hover:bg-accent text-foreground/80',
+    badge: t === 'blue' ? 'bg-blue-800 text-blue-200' : 'bg-accent text-foreground/80',
+  };
+
+  return (
+    <div className={`px-3 py-3 space-y-2 border-t ${clr.border}`}>
+      {/* Meta */}
+      <div className={`text-xs flex items-center gap-2 flex-wrap ${clr.subtext}`}>
+        {allowMulti && <span>{tr('Chọn nhiều phương án')}</span>}
+        {isAnon && <span>{tr('Ẩn danh')}</span>}
+        {(isClosed || isExpired) && (
+          <span className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${clr.badge}`}>
+            {isClosed ? tr('Đã khoá') : tr('Hết hạn')}
+          </span>
+        )}
+      </div>
+
+      {numVote > 0 && <p className={`text-xs font-semibold ${clr.voteCount}`}>{trx('{{numVote}} lượt bình chọn', { numVote })}</p>}
+
+      {/* Options */}
+      <div className="space-y-1.5">
+        {options.map((opt, i) => {
+          const optId = opt.option_id ?? i;
+          const votes = opt.votes || 0;
+          const voters = opt.voters || [];
+          const isChecked = currentIds.includes(optId);
+          const wasVoted = serverVotedIds.includes(optId);
+          const pct = numVote > 0 ? Math.round(votes / numVote * 100) : 0;
+
+          return (
+            <div key={optId}>
+              <button
+                onClick={() => toggleOption(optId)}
+                disabled={!canVote}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-all ${
+                  isChecked ? clr.optChecked : clr.optUnchecked
+                } ${!canVote ? 'cursor-default' : 'cursor-pointer'}`}
+              >
+                {canVote && (
+                  <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
+                    isChecked ? 'border-blue-400 bg-blue-400' : clr.radio
+                  }`}>
+                    {isChecked && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                  </div>
+                )}
+                <span className={`flex-1 text-sm truncate ${clr.text}`}>{opt.content || tr('Lựa chọn {{v1}}', { v1: i + 1 })}</span>
+
+                {/* Voter mini avatars */}
+                {!isAnon && voters.length > 0 && contacts.length > 0 && (
+                  <div className="flex -space-x-1 flex-shrink-0">
+                    {voters.slice(0, 3).map(uid => (
+                      <VoterMiniAvatar key={uid} uid={uid} contacts={contacts} theme={t} />
+                    ))}
+                    {voters.length > 3 && (
+                      <div className="w-5 h-5 rounded-full bg-accent border border-border flex items-center justify-center text-[8px] text-foreground flex-shrink-0">
+                        +{voters.length - 3}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <span className={`text-xs flex-shrink-0 font-medium ${clr.subtext}`}>{votes}</span>
+              </button>
+
+              {/* Progress bar */}
+              <div className={`h-0.5 rounded-full mx-1 mt-0.5 ${clr.bar}`}>
+                <div className={`h-0.5 rounded-full transition-all duration-300 ${wasVoted ? clr.barVoted : clr.barOther}`}
+                  style={{ width: `${pct}%` }} />
+              </div>
+
+              {/* Voter list link (if contacts exist) */}
+              {!isAnon && voters.length > 0 && contacts.length > 0 && (
+                <div className="flex items-center gap-1.5 px-1 pt-1">
+                  <button
+                    onClick={e => { e.stopPropagation(); setVoterListOpt(opt); }}
+                    className={`text-[11px] hover:text-blue-400 transition-colors ${clr.subtext}`}
+                  >
+                    {trx('Xem danh sách ({{count}})', { count: voters.length })}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add option */}
+      {showAddOption && allowAddNew && !isClosed && !isExpired && (
+        <div className="flex items-center gap-1.5 mt-1">
+          <input
+            value={newOptionText}
+            onChange={e => setNewOptionText(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleAddOption()}
+            placeholder={tr('+ Thêm lựa chọn...')}
+            className={`flex-1 text-xs px-2.5 py-1.5 rounded-lg bg-transparent border focus:outline-none ${clr.inputBorder}`}
+          />
+          {newOptionText.trim() && (
+            <button onClick={handleAddOption} disabled={addingOption}
+              className={`text-xs px-2 py-1.5 rounded-lg font-semibold transition-colors ${clr.addBtn}`}>
+              {tr('Thêm')}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Save button: shown only when something changed */}
+      {canVote && isDirty && (
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className={`w-full py-2 rounded-xl text-sm font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 ${clr.saveBtn}`}
+        >
+          {saving && <Spinner size={3} />}
+          {pendingIds?.length === 0 ? tr('Huỷ bình chọn') : tr('Lưu bình chọn')}
+        </button>
+      )}
+
+      {/* Lock poll: creator only */}
+      {showLockButton && isCreator && !isClosed && (
+        <button
+          onClick={handleLock}
+          disabled={locking}
+          className={`w-full py-1.5 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 ${clr.lockBtn}`}
+        >
+          {locking
+            ? <Spinner size={3} />
+            : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+              </svg>
+          }
+          {tr('Khoá bình chọn')}
+        </button>
+      )}
+
+      {voterListOpt && (
+        <VoterListModal option={voterListOpt} contacts={contacts} onClose={() => setVoterListOpt(null)} />
+      )}
+    </div>
+  );
+}
+
+
+
+
+
+

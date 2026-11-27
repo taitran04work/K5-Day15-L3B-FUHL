@@ -30,6 +30,7 @@ public interface IAppDbContext
     DbSet<FaqItem> FaqItems { get; }
     DbSet<Conversation> Conversations { get; }
     DbSet<Message> Messages { get; }
+    DbSet<ChannelConnection> ChannelConnections { get; }
     DbSet<AuditLog> AuditLogs { get; }
     DatabaseFacade Database { get; }
     Task<int> SaveChangesAsync(CancellationToken ct = default);

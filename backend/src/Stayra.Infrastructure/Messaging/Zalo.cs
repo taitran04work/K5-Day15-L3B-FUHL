@@ -118,23 +118,34 @@ public class ZaloClient(HttpClient http, IOptions<ZaloOptions> options, ISecretP
     }
 }
 
-/// <summary>Renders messages for Zalo: text plus images and links (Zalo has no rich cards in CS messages).</summary>
-public class ZaloAdapter(ZaloClient zalo, IOptions<ZaloOptions> options, ILogger<ZaloAdapter> log) : IChannelAdapter
+/// <summary>Delivers outbound messages for Deplao-compatible channels (Zalo, Facebook, Telegram) and falls back to Zalo OA for Zalo.</summary>
+public class DeplaoChannelAdapter(ChannelType channel, ZaloClient zalo, DeplaoClient deplao, IOptions<ZaloOptions> options, ILogger<DeplaoChannelAdapter> log) : IChannelAdapter
 {
-    public ChannelType Channel => ChannelType.Zalo;
+    public ChannelType Channel => channel;
 
     public async Task DeliverAsync(Tenant tenant, Conversation conversation, Message message, IReadOnlyList<Card> cards, CancellationToken ct)
     {
         if (message.Role is MessageRole.Guest or MessageRole.Tool) return;
         if (string.IsNullOrEmpty(conversation.ExternalUserId)) return;
         // Simulator conversations are delivered only over SignalR.
-        if (conversation.ExternalUserId.StartsWith("sim-") || !zalo.IsConnected(tenant)) return;
+        if (conversation.ExternalUserId.StartsWith("sim-")) return;
 
-        var text = message.Content + RenderCardsAsText(cards, tenant, options.Value.WebBaseUrl, conversation.Language);
-        await zalo.SendTextAsync(tenant, conversation.ExternalUserId, text.Trim(), ct);
-        foreach (var url in ImagesOf(cards).Take(3))
+        var text = (message.Content + RenderCardsAsText(cards, tenant, options.Value.WebBaseUrl, conversation.Language)).Trim();
+        var imageUrls = ImagesOf(cards).Where(u => u.StartsWith("http")).Take(3).ToList();
+
+        if (deplao.IsConnected(tenant))
         {
-            if (!url.StartsWith("http")) continue;
+            var fullText = imageUrls.Count > 0 ? $"{text}\n{string.Join("\n", imageUrls)}" : text;
+            var res = await deplao.SendDeliveryAsync(tenant, conversation.ExternalAccountId, conversation.ExternalUserId, fullText.Trim(), "user", ct);
+            if (!res.Ok) log.LogWarning("Deplao delivery failed for {Channel} conversation {Id}: {Msg}", channel, conversation.Id, res.Message);
+            return;
+        }
+
+        if (channel != ChannelType.Zalo || !zalo.IsConnected(tenant)) return;
+
+        await zalo.SendTextAsync(tenant, conversation.ExternalUserId, text, ct);
+        foreach (var url in imageUrls)
+        {
             var (ok, msg) = await zalo.SendImageAsync(tenant, conversation.ExternalUserId, url, null, ct);
             if (!ok) log.LogDebug("Zalo image skipped: {Msg}", msg);
         }

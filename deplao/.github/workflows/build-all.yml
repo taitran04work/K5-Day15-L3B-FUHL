@@ -1,0 +1,287 @@
+# ─── Build Deplao - Windows + macOS cùng lúc ─────────────────────────────────
+# Workflow tổng hợp: trigger cả 2 job song song, publish lên cùng 1 Release tag
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Build All Platforms
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to GitHub Releases?'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      tag_name:
+        description: 'Tag cho release (vd: v26.4.0). Bỏ trống = tự lấy từ package.json'
+        required: false
+        default: ''
+        type: string
+
+  push:
+    tags:
+      - 'v*'
+
+# ─── SECRETS ─────────────────────────────────────────────────────────────────
+#   Không cần: publish dùng GITHUB_TOKEN có sẵn (permissions: contents: write ở trên).
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Resolve tag một lần - chia sẻ cho cả 2 job build
+  # ═══════════════════════════════════════════════════════════════════════════
+  resolve-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.get_tag.outputs.tag }}
+      should_publish: ${{ steps.get_tag.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🏷️ Resolve tag
+        id: get_tag
+        shell: bash
+        run: |
+          SHOULD_PUBLISH="false"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            SHOULD_PUBLISH="true"
+          elif [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+            SHOULD_PUBLISH="${{ github.event.inputs.publish }}"
+          else
+            VERSION=$(node -p "require('./package.json').version")
+            TAG="v${VERSION}"
+            SHOULD_PUBLISH="${{ github.event.inputs.publish }}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "should_publish=${SHOULD_PUBLISH}" >> $GITHUB_OUTPUT
+          echo "✅ Tag: ${TAG} | Publish: ${SHOULD_PUBLISH}"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Windows (x64)
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-windows:
+    needs: resolve-tag
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 🟢 Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: 🏗️ Compile TypeScript (electron)
+        run: npx tsc -p tsconfig.electron.prod.json
+
+      - name: 🏗️ Build renderer (Vite)
+        run: npx vite build
+        env:
+          NODE_ENV: production
+          BUILD_TARGET: production
+
+      - name: 🔧 Rebuild native modules for Electron
+        run: npm run rebuild:native
+
+      - name: 📦 Build Windows app (x64)
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: 🚀 Publish Windows → GitHub Releases
+        if: needs.resolve-tag.outputs.should_publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: babyvibe/deplao-builder
+          tag_name: ${{ needs.resolve-tag.outputs.tag }}
+          name: "Deplao ${{ needs.resolve-tag.outputs.tag }}"
+          files: |
+            dist-electron-build/*.exe
+            dist-electron-build/*.blockmap
+            dist-electron-build/latest.yml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+          prerelease: false
+          make_latest: false
+          fail_on_unmatched_files: false
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # macOS (arm64 - Apple Silicon)
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-mac-arm64:
+    needs: resolve-tag
+    # GitHub gỡ image macOS 14 ngày 02/11/2026 (job lỗi ngay: "The configuration 'macos-14-arm64-us-default' is not
+    # supported"). macos-15 cũng là Apple Silicon. Ghim số, không dùng macos-latest (đã là macOS 26) để bản build
+    # không tự đổi môi trường.
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 🟢 Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: 🏗️ Compile TypeScript (electron)
+        run: npx tsc -p tsconfig.electron.prod.json
+
+      - name: 🏗️ Build renderer (Vite)
+        run: npx vite build
+        env:
+          NODE_ENV: production
+          BUILD_TARGET: production
+
+      - name: 🔧 Rebuild native modules for Electron
+        run: npm run rebuild:native
+
+      # hdiutil trên runner macOS của GitHub lỗi chập chờn khi tạo DMG ("create failed - Device not configured",
+      # "Resource busy" — actions/runner-images#7522): macOS quét file / giữ ổ ảo đúng lúc tạo. Cùng image + cùng
+      # cấu hình vẫn lúc qua lúc lỗi, nên tắt XProtect trước khi đóng gói và thử lại tối đa 3 lần.
+      # Giữ MỘT lần build cho cả DMG arm64 + x64 (mac.target trong package.json): latest-mac.yml phải có đủ hai
+      # kiến trúc cho tự cập nhật — tách thành hai lần build thì lần sau ghi đè mất kiến trúc kia.
+      - name: 🛡️ Giảm lỗi hdiutil (tắt XProtect)
+        run: |
+          sudo pkill -9 XProtect >/dev/null 2>&1 || true
+          for i in $(seq 1 20); do pgrep XProtect >/dev/null || break; sleep 3; done
+
+      - name: 📦 Build macOS app (arm64)
+        run: |
+          for attempt in 1 2 3; do
+            if npx electron-builder --mac --arm64 --publish never; then exit 0; fi
+            echo "::warning::Đóng gói macOS lỗi lần ${attempt}/3 (thường do hdiutil chập chờn trên runner), thử lại..."
+            for v in /Volumes/Deplao*; do [ -d "$v" ] && hdiutil detach "$v" -force || true; done
+            sudo pkill -9 XProtect >/dev/null 2>&1 || true
+            sleep 20
+          done
+          exit 1
+
+      - name: 🚀 Publish macOS → GitHub Releases
+        if: needs.resolve-tag.outputs.should_publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: babyvibe/deplao-builder
+          tag_name: ${{ needs.resolve-tag.outputs.tag }}
+          name: "Deplao ${{ needs.resolve-tag.outputs.tag }}"
+          files: |
+            dist-electron-build/*.dmg
+            dist-electron-build/*.blockmap
+            dist-electron-build/latest-mac.yml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: false
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Ubuntu/Linux (x64 - AppImage + deb)
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-ubuntu:
+    needs: resolve-tag
+    # ubuntu-latest chuyển dần sang Ubuntu 26 từ 19/10/2026: module native (better-sqlite3) build trên glibc mới có thể
+    # không chạy được trên Ubuntu / Debian cũ hơn. Ghim 24.04 như các bản trước (26.10.4 build trên 24.04).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 🟢 Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 🟢 Setup Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: 📦 Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libfuse2 \
+            dpkg-dev \
+          || echo 'WARN: some system deps may be missing'
+
+      - name: 📦 Install npm dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: 🏗️ Build E2EE bridge (Go)
+        run: npm run build:bridge-e2ee
+
+      - name: 🏗️ Compile TypeScript (electron)
+        run: npx tsc -p tsconfig.electron.prod.json
+
+      - name: 🏗️ Build renderer (Vite)
+        run: npx vite build
+        env:
+          NODE_ENV: production
+          BUILD_TARGET: production
+
+      - name: 🔧 Rebuild native modules for Electron
+        run: npm run rebuild:native
+
+      - name: 📦 Build Linux app (x64 - AppImage + deb)
+        run: npx electron-builder --linux --x64 --publish never
+
+      - name: 🚀 Publish Linux → GitHub Releases
+        if: needs.resolve-tag.outputs.should_publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: babyvibe/deplao-builder
+          tag_name: ${{ needs.resolve-tag.outputs.tag }}
+          name: "Deplao ${{ needs.resolve-tag.outputs.tag }}"
+          files: |
+            dist-electron-build/*.AppImage
+            dist-electron-build/*.deb
+            dist-electron-build/*.blockmap
+            dist-electron-build/latest-linux.yml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+          prerelease: false
+          make_latest: false
+          fail_on_unmatched_files: false
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Gắn link commit đã build / so sánh với bản trước vào ghi chú Release
+  # (release-links.yml) — chạy cả khi một nền tảng lỗi, miễn Release đã có
+  # ═══════════════════════════════════════════════════════════════════════════
+  release-links:
+    needs: [resolve-tag, build-windows, build-mac-arm64, build-ubuntu]
+    if: always() && needs.resolve-tag.outputs.should_publish == 'true'
+    uses: ./.github/workflows/release-links.yml
+    with:
+      tag: ${{ needs.resolve-tag.outputs.tag }}
+    permissions:
+      contents: write

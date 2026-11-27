@@ -1,0 +1,299 @@
+/**
+ * Popups / dialogs of the chat window: photo + video viewer, message right-click menu, forward, appointment / note from a
+ * message, reaction menu + list, sender profile, group management, group notes, Telegram sticker set (bot Mini App:
+ * TelegramMiniAppHost in App).
+ * Open / close state lives in useChatWindowDialogs (+ useMediaViewers); actions live in useMessageActions.
+ */
+import MediaGalleryViewer from '../../media/MediaGalleryViewer';
+import MessageContextMenu from '../../messages/MessageContextMenu';
+import VideoPlayer from '../../media/VideoPlayer';
+import { type Channel, getChannelLabel } from '@/../configs/channels/channelConfig';
+import { QuickEventDialog, QuickNoteDialog } from '../../quick/QuickErpDialogs';
+import { QuickTaskFromMessages } from '../../quick/QuickTaskFromMessages';
+import { eventDraftFromMessages, noteDraftFromMessages } from '@/lib/chat/erp/messageToErp';
+import { CHANNEL } from '@/lib/channels/channelHelper';
+import { myDocumentsThreadId } from '@/lib/chat/zalo/myDocuments';
+import { ManagePanel } from '../../groups/GroupInfoPanel';
+import { UserProfilePopup } from '../../../common/profile/UserProfilePopup';
+import { getTelegramPostMeta } from '@/lib/media/mediaResolver';
+import { canQueryTelegramReadReceipts } from '@/lib/chat/read/readReceipts';
+import ipc from '@/lib/ipc';
+import { toLocalMediaUrl } from '@/lib/media/localMedia';
+import { NoteViewModal } from '../../groups/NoteViewModal';
+import ForwardMessageModal from '../../messages/ForwardMessageModal';
+import { parseReactionsFull, ReactionContextMenu, ReactionPopup } from '../../messages/reactions/ReactionComponents';
+import { getReactionChoices } from '@/lib/chat/reactions/reactionChoices';
+import { TelegramStickerSetHost } from '../../telegram/stickers/TelegramStickerSetDialog';
+import type { useQuickErpAccess } from '@/hooks/erp/useQuickErpAccess';
+import type { useTelegramChatReactions } from '@/lib/chat/reactions/reactionChoices';
+import type { usePinnedData } from '../../messages/PinnedMessages';
+import type { OpenThread } from '../hooks/useOpenThread';
+import type { MessageGrouping } from '../hooks/useMessageGrouping';
+import type { SenderDirectory } from '../hooks/useSenderDirectory';
+import type { ChatWindowDialogs } from '../hooks/useChatWindowDialogs';
+import type { MessageSelection } from '../hooks/useMessageSelection';
+import type { MediaViewers } from '../hooks/useMediaViewers';
+import type { MessageActions } from '../hooks/useMessageActions';
+import { tr } from '../../../../../shared/i18n';
+
+type PinnedData = ReturnType<typeof usePinnedData>;
+
+interface ModalExtras {
+  telegramReactions: ReturnType<typeof useTelegramChatReactions>;
+  erpAccess: ReturnType<typeof useQuickErpAccess>;
+}
+
+export type ChatWindowModalsProps =
+  // Open conversation
+  Pick<OpenThread, 'activeAccountId' | 'activeThreadId' | 'activeContact' | 'allAccounts' | 'channelCap' | 'contactList' | 'threadGroupInfo' | 'setReplyTo' | 'setEditingMsg' | 'showNotification'>
+  // Gom tin
+  & Pick<MessageGrouping, 'groupedFirstMsgs'>
+  // Sender
+  & Pick<SenderDirectory, 'contactMap' | 'getContact' | 'getGroupMember' | 'groupMembers' | 'erpSourceOf'>
+  // Open menus / popups
+  & Pick<ChatWindowDialogs, 'contextMenu' | 'setContextMenu' | 'forwardMsgs' | 'setForwardMsgs' | 'erpDraft' | 'setErpDraft' | 'reactionPopup' | 'setReactionPopup' | 'reactionContextMenu' | 'setReactionContextMenu' | 'userProfilePopup' | 'setUserProfilePopup' | 'manageGroupOpen' | 'setManageGroupOpen' | 'noteModal' | 'setNoteModal'>
+  // Multi-select
+  & Pick<MessageSelection, 'setIsSelecting' | 'setSelectedMsgIds'>
+  // Photo / video viewer
+  & Pick<MediaViewers, 'mediaGalleryRef' | 'buildImageEntry' | 'videoPlayerState' | 'setVideoPlayerState'>
+  // Message actions
+  & Pick<MessageActions, 'handleUndo' | 'handleDelete' | 'handleDeleteFromDb' | 'handleReact' | 'handleCancelReaction' | 'handleForward' | 'runForward' | 'handleSaveToMyDocuments' | 'contextTargetStarred' | 'handleToggleStar' | 'handlePin'>
+  // Pinned notes (usePinnedData)
+  & Pick<PinnedData, 'setPinnedNotes'>
+  // Reactions available in the Telegram conversation + Task management rights
+  & Pick<ModalExtras, 'telegramReactions' | 'erpAccess'>;
+
+/** "Lưu vào My Documents" (Save to My Documents): Zalo and Telegram (Saved Messages); hidden when already in that same conversation. */
+const SAVE_TO_MY_DOCUMENTS_CHANNELS = new Set<string>([CHANNEL.ZALO, CHANNEL.TELEGRAM_USER]);
+
+export function ChatWindowModals(props: ChatWindowModalsProps) {
+  const {
+    activeAccountId, activeThreadId, activeContact, allAccounts, channelCap, contactList, threadGroupInfo, setReplyTo, setEditingMsg, showNotification,
+    groupedFirstMsgs,
+    contactMap, getContact, getGroupMember, groupMembers, erpSourceOf,
+    contextMenu, setContextMenu, forwardMsgs, setForwardMsgs, erpDraft, setErpDraft, reactionPopup, setReactionPopup, reactionContextMenu, setReactionContextMenu, userProfilePopup, setUserProfilePopup, manageGroupOpen, setManageGroupOpen, noteModal, setNoteModal,
+    setIsSelecting, setSelectedMsgIds,
+    mediaGalleryRef, buildImageEntry, videoPlayerState, setVideoPlayerState,
+    handleUndo, handleDelete, handleDeleteFromDb, handleReact, handleCancelReaction, handleForward, runForward, handleSaveToMyDocuments, contextTargetStarred, handleToggleStar, handlePin,
+    setPinnedNotes,
+    telegramReactions, erpAccess,
+  } = props;
+  return (
+    <>
+      <MediaGalleryViewer
+        ref={mediaGalleryRef}
+        accountId={activeAccountId}
+        threadId={activeThreadId}
+        buildEntry={buildImageEntry}
+      />
+
+      {/* Video player modal */}
+      {videoPlayerState && (
+        <VideoPlayer
+          localPath={videoPlayerState.localPath}
+          remoteUrl={videoPlayerState.remoteUrl}
+          thumbUrl={videoPlayerState.thumbUrl}
+          width={videoPlayerState.width}
+          height={videoPlayerState.height}
+          duration={videoPlayerState.duration}
+          msgId={videoPlayerState.msgId}
+          threadId={videoPlayerState.threadId}
+          onClose={() => setVideoPlayerState(null)}
+        />
+      )}
+
+      {contextMenu && (
+        <MessageContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          msg={contextMenu.msg}
+          mediaMsg={contextMenu.mediaMsg}
+          isSent={contextMenu.isSent}
+          isGroupAdmin={contextMenu.isGroupAdmin}
+          recalled={contextMenu.recalled}
+          channelCap={channelCap}
+          onClose={() => setContextMenu(null)}
+          onReply={(m) => setReplyTo(m)}
+          onForward={handleForward}
+          onSelectMessages={(m) => { setIsSelecting(true); setSelectedMsgIds(new Set((groupedFirstMsgs[m.msg_id] || [m]).map((x: any) => x.msg_id))); }}
+          onUndo={handleUndo}
+          onDelete={handleDelete}
+          onDeleteFromDb={handleDeleteFromDb}
+          onReact={handleReact}
+          onCancelReact={handleCancelReaction}
+          reactionChoices={getReactionChoices(contextMenu.msg?.channel, telegramReactions.reactions)}
+          myReaction={(() => {
+            if (!activeAccountId || !contextMenu.msg) return null;
+            const full = parseReactionsFull(contextMenu.msg.reactions, contextMenu.msg.channel);
+            return Object.entries(full.emoji || {}).find(([, data]) => (data as any).users?.[activeAccountId] > 0)?.[0] || null;
+          })()}
+          onPin={handlePin}
+          onEdit={(m) => {
+            setEditingMsg(m);
+            setContextMenu(null);
+          }}
+          isStarred={contextTargetStarred}
+          onToggleStar={handleToggleStar}
+          onSaveToMyDocuments={channelCap.supportsForward && SAVE_TO_MY_DOCUMENTS_CHANNELS.has(activeContact?.channel || CHANNEL.ZALO)
+            && activeThreadId !== myDocumentsThreadId(allAccounts.find((a) => a.zalo_id === activeAccountId)) ? handleSaveToMyDocuments : undefined}
+          onAddToCalendar={erpAccess.event ? (m) => setErpDraft({ kind: 'event', msgs: groupedFirstMsgs[m.msg_id] || [m] }) : undefined}
+          onSaveToNote={erpAccess.note ? (m) => setErpDraft({ kind: 'note', msgs: groupedFirstMsgs[m.msg_id] || [m] }) : undefined}
+          onCreateTask={erpAccess.task ? (m) => setErpDraft({ kind: 'task', msgs: groupedFirstMsgs[m.msg_id] || [m] }) : undefined}
+          showNotification={showNotification}
+          readReceipts={activeAccountId && canQueryTelegramReadReceipts(contextMenu.msg, {
+            isSent: contextMenu.isSent,
+            isChannelPost: !!getTelegramPostMeta(contextMenu.msg),
+            recalled: contextMenu.recalled,
+          }) ? {
+            accountId: activeAccountId,
+            // Viewer name / avatar: the account's contact → the members of the open group (main has a fallback name)
+            resolvePerson: (userId: string) => {
+              const contact = getContact(userId) as any;
+              const member = getGroupMember(userId) as any;
+              const name = String(contact?.alias || contact?.display_name || member?.displayName || '');
+              const avatar = toLocalMediaUrl(contact?.avatar_url || member?.avatar || '');
+              return name && name !== userId ? { name, avatar } : (avatar ? { name: '', avatar } : null);
+            },
+          } : undefined}
+        />
+      )}
+
+      {/* Forward message modal */}
+      {channelCap.supportsForward && forwardMsgs && (
+        <ForwardMessageModal
+          messages={forwardMsgs}
+          onClose={() => setForwardMsgs(null)}
+          onForward={(messages, targets, composeText) => {
+            setForwardMsgs(null);
+            runForward(messages, targets, composeText);
+          }}
+        />
+      )}
+
+      {/* Task management: calendar appointment / note / task from a message (pre-fills the title, the date and time read from the message, and the message content; the task
+          includes the message's photo) */}
+      {erpDraft && activeAccountId && activeThreadId && (() => {
+        const conversation = activeContact?.alias || activeContact?.display_name || activeThreadId;
+        const account = allAccounts.find(a => a.zalo_id === activeAccountId);
+        const ctx = {
+          conversation,
+          channelLabel: getChannelLabel(((activeContact?.channel || account?.channel || CHANNEL.ZALO) as Channel)),
+          accountName: account?.full_name || '',
+        };
+        const sources = erpDraft.msgs.map(erpSourceOf);
+        if (erpDraft.kind === 'note') {
+          return <QuickNoteDialog initial={noteDraftFromMessages(sources, ctx)} onClose={() => setErpDraft(null)} />;
+        }
+        if (erpDraft.kind === 'task') {
+          return <QuickTaskFromMessages msgs={erpDraft.msgs} sources={sources} ctx={ctx} onClose={() => setErpDraft(null)} />;
+        }
+        const draft = eventDraftFromMessages(sources, ctx);
+        const linkedMsg = erpDraft.msgs[draft.sourceIndex];
+        const msgId = linkedMsg && !/^(temp|retry)_/.test(String(linkedMsg.msg_id)) ? String(linkedMsg.msg_id) : undefined;
+        return (
+          <QuickEventDialog
+            heading={tr('Thêm vào lịch')}
+            activeThread={{ id: activeThreadId, name: conversation, accountId: activeAccountId, msgId }}
+            initial={draft}
+            onClose={() => setErpDraft(null)}
+          />
+        );
+      })()}
+
+      {/* Reaction context menu (right-click on reaction pill) */}
+      {channelCap.supportsReaction && reactionContextMenu && (
+        <ReactionContextMenu
+          x={reactionContextMenu.x}
+          y={reactionContextMenu.y}
+          msg={reactionContextMenu.msg}
+          myEmoji={reactionContextMenu.myEmoji}
+          onClose={() => setReactionContextMenu(null)}
+          onReact={(msg, emoji) => { handleReact(msg, emoji); setReactionContextMenu(null); }}
+          onCancel={(msg) => { handleCancelReaction(msg); setReactionContextMenu(null); }}
+        />
+      )}
+
+      {/* Reaction popup: see who reacted */}
+      {channelCap.supportsReaction && reactionPopup && (
+        <ReactionPopup
+          msg={reactionPopup.msg}
+          initialEmoji={reactionPopup.activeEmoji}
+          contacts={contactList}
+          groupMembers={groupMembers}
+          currentUserId={activeAccountId || ''}
+          onClose={() => setReactionPopup(null)}
+          ownerZaloId={activeAccountId || undefined}
+        />
+      )}
+
+      {/* User profile popup */}
+      {userProfilePopup && (
+        <UserProfilePopup
+          userId={userProfilePopup.userId}
+          anchorX={userProfilePopup.x}
+          anchorY={userProfilePopup.y}
+          contacts={contactList}
+          activeAccountId={activeAccountId || ''}
+          activeThreadId={activeThreadId}
+          onClose={() => setUserProfilePopup(null)}
+        />
+      )}
+
+      {/* Manage group modal: opened from the "Quản lý nhóm" (Manage group) button in EcardBubble */}
+      {manageGroupOpen && activeThreadId && activeAccountId && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setManageGroupOpen(false); }}
+        >
+          <div className="bg-card border border-border rounded-2xl shadow-2xl w-[380px] max-h-[80vh] flex flex-col overflow-hidden">
+            <ManagePanel
+              groupInfo={threadGroupInfo || null}
+              groupId={activeThreadId}
+              onBack={() => setManageGroupOpen(false)}
+              myAccountId={activeAccountId}
+              asModal
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Note view modal: opens when clicking a pinned note */}
+      {noteModal && activeThreadId && activeAccountId && (
+        <NoteViewModal
+          topicId={noteModal.topicId}
+          initialTitle={noteModal.title || ''}
+          groupId={activeThreadId}
+          creatorName={noteModal.creatorName}
+          createTime={noteModal.createTime}
+          isGroup={!!contactMap.get(activeThreadId) && (contactMap.get(activeThreadId)?.contact_type === 'group' || contactMap.get(activeThreadId)?.contact_type === '1')}
+          activeAccountId={activeAccountId}
+          onClose={() => setNoteModal(null)}
+          onNotePinned={(note) => {
+            // Save to DB so it persists across restarts
+            ipc.db?.pinMessage({
+              zaloId: activeAccountId,
+              threadId: activeThreadId,
+              pin: {
+                msgId: `note_${note.topicId}`,
+                msgType: 'note',
+                content: JSON.stringify({ topicId: note.topicId, title: note.title, creatorId: note.creatorId, createTime: note.createTime }),
+                previewText: note.title,
+                previewImage: '',
+                senderId: note.creatorId || '',
+                senderName: note.creatorName || '',
+                timestamp: note.createTime || Date.now(),
+              },
+            }).catch(() => {});
+            setPinnedNotes(prev => {
+              const filtered = prev.filter(n => n.topicId !== note.topicId);
+              return [note, ...filtered];
+            });
+          }}
+        />
+      )}
+
+      {/* Telegram sticker set popup (click a sticker in the chat / the sticker panel of the input box) */}
+      <TelegramStickerSetHost />
+    </>
+  );
+}

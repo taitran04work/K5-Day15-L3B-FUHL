@@ -1,0 +1,1115 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import DataAccessor from '@/lib/data/DataAccessor';
+import ipc, { buildZaloAuth } from '@/lib/ipc';
+import { AccountInfo } from '@/store/accounts/accountStore';
+import { useAppStore } from '@/store/app/appStore';
+import { showConfirm } from '../../common/ConfirmDialog';
+import AccountSelectorDropdown, { AccountOption } from '../../common/accounts/AccountSelectorDropdown';
+import AccountMultiDropdown from '../../common/accounts/AccountMultiDropdown';
+import { syncZaloLabelsToLocalDB } from '@/lib/labels/labelUtils';
+import { CHANNEL, isZalo } from '@/lib/channels/channelHelper';
+import { LabelEmojiPicker, KeyboardShortcutInput } from '../../common/inputs/LabelEmojiPicker';
+import PageLoading from '@/components/common/PageLoading';
+import { AlertIcon, CheckIcon, ClipboardListIcon, CloudIcon, CloseIcon, EditIcon, HardDriveIcon, InboxIcon, PluginIcon, RefreshIcon, TagIcon } from '@/components/common/icons';
+import { tr } from '../../../../shared/i18n';
+import { trx } from '@/lib/i18n/trx';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+type LabelSource = 'local' | 'zalo';
+
+export interface LocalLabel {
+  id: number;
+  name: string;
+  color: string;
+  text_color?: string;
+  emoji?: string;
+  page_ids?: string;
+  is_active?: number;
+  sort_order?: number;
+  shortcut?: string; // Shortcut to quickly attach/remove (e.g. "Ctrl + M")
+}
+
+// ─── Shared mini-components ───────────────────────────────────────────────────
+function EmptyState({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) {
+  return (
+    <div className="text-center py-14">
+      <p className="text-3xl mb-2 place-items-center">{icon}</p>
+      <p className="text-muted-foreground text-sm font-medium">{title}</p>
+      <p className="text-muted-foreground text-xs mt-1">{subtitle}</p>
+    </div>
+  );
+}
+
+function ModalWrapper({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      {children}
+    </div>
+  );
+}
+
+// ─── LabelRow ─────────────────────────────────────────────────────────────────
+function LabelRow({
+  item, getAccountName, getAccountPhone, getAccountAvatar,
+  onEdit, onDelete, onToggleActive, isDragging,
+}: {
+  item: LocalLabel;
+  getAccountName: (id: string) => string;
+  getAccountPhone: (id: string) => string;
+  getAccountAvatar: (id: string) => string | undefined;
+  onEdit: () => void; onDelete: () => void; onToggleActive: () => void;
+  isDragging?: boolean;
+}) {
+  const pageIds = (item.page_ids || '').split(',').filter(Boolean);
+  const isActive = (item.is_active ?? 1) === 1;
+  return (
+    <div className={`bg-card border rounded-xl p-3 hover:border-input transition-colors ${isDragging ? 'opacity-40' : ''} ${isActive ? 'border-border/80' : 'border-border/30 opacity-60'}`}>
+      <div className="flex items-center gap-3">
+        {/* Drag handle */}
+        <div className="cursor-grab text-muted-foreground hover:text-muted-foreground select-none shrink-0" title={tr('Kéo để sắp xếp')}>
+          <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
+            <circle cx="3" cy="2.5" r="1.2"/><circle cx="7" cy="2.5" r="1.2"/>
+            <circle cx="3" cy="7" r="1.2"/><circle cx="7" cy="7" r="1.2"/>
+            <circle cx="3" cy="11.5" r="1.2"/><circle cx="7" cy="11.5" r="1.2"/>
+          </svg>
+        </div>
+        {/* Label preview */}
+        <div className="px-2.5 py-1.5 rounded-xl flex items-center gap-1.5 shadow shrink-0 min-w-0 max-w-[180px] text-foreground"
+          style={{ backgroundColor: item.color }}>
+          <span className="text-sm leading-none shrink-0">{item.emoji || ''}</span>
+          <span className="font-semibold text-xs truncate" style={{ color: item.text_color || '#fff' }}>{item.name}</span>
+        </div>
+        {/* Shortcut badge */}
+        {item.shortcut && (
+          <span className="px-1.5 py-0.5 bg-card border border-border rounded text-[10px] text-muted-foreground font-mono shrink-0" title={tr('Phím tắt')}>
+            ⌨ {item.shortcut}
+          </span>
+        )}
+        {(item.sort_order ?? 0) > 0 && (
+          <span className="text-[9px] text-muted-foreground font-mono bg-muted px-1 rounded shrink-0">#{item.sort_order}</span>
+        )}
+        <div className="flex-1 min-w-0" />
+        {/* Actions */}
+        <div className="flex items-center gap-0.5 shrink-0">
+          <button onClick={onToggleActive} title={isActive ? tr('Tắt') : tr('Bật')}
+            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${isActive ? 'text-green-400 hover:bg-green-500/10' : 'text-muted-foreground hover:bg-muted hover:text-muted-foreground'}`}>
+            {isActive
+              ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>
+              : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/></svg>
+            }
+          </button>
+          <button onClick={onEdit} title={tr('Sửa')}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </button>
+          <button onClick={onDelete} title={tr('Xóa')}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+              <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      {/* Account badges */}
+      <div className="mt-2 pl-5 flex flex-wrap gap-1.5">
+        {pageIds.length > 0 ? pageIds.map(pid => {
+          const name = getAccountName(pid);
+          const phone = getAccountPhone(pid);
+          const avatar = getAccountAvatar(pid);
+          return (
+            <div key={pid} className="flex items-center gap-1.5 bg-card rounded-full px-2 py-0.5 border border-border/50">
+              {avatar ? (
+                <img src={avatar} alt="" className="w-3.5 h-3.5 rounded-full object-cover shrink-0" />
+              ) : (
+                <div className="w-3 h-3 bg-blue-600 rounded-full flex items-center justify-center text-[7px] text-white font-bold uppercase shrink-0">
+                  {(name || '?').charAt(0)}
+                </div>
+              )}
+              <span className="text-[11px] text-muted-foreground truncate max-w-[140px]">{name}</span>
+              {phone && <span className="text-[11px] text-muted-foreground">· {phone}</span>}
+            </div>
+          );
+        }) : <span className="text-[11px] text-muted-foreground italic">{tr('Chưa gắn tài khoản nào')}</span>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Zalo Labels Section ──────────────────────────────────────────────────────
+function ZaloLabelsSection({
+  activeZaloId, isConnected, loading, labels, onRefresh, onSyncToLocal, onEdit, onDeleteItem, onSaveItem,
+}: {
+  activeZaloId: string | null; isConnected: boolean; loading: boolean; labels: any[];
+  onRefresh: () => void;
+  onSyncToLocal?: () => void;
+  onEdit?: () => void;
+  onDeleteItem?: (label: any) => void;
+  onSaveItem?: (label: any, newData: any) => void;
+}) {
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState({ text: '', color: '#3b82f6', emoji: '🏷️' });
+
+  const startEdit = (idx: number, label: any) => {
+    setEditingIdx(idx);
+    setEditForm({ text: label.text || label.name || '', color: label.color || '#3b82f6', emoji: label.emoji || label.icon || '🏷️' });
+  };
+
+  const handleSaveEdit = (label: any) => {
+    onSaveItem?.(label, { text: editForm.text, name: editForm.text, color: editForm.color, emoji: editForm.emoji, icon: editForm.emoji });
+    setEditingIdx(null);
+  };
+
+  if (!activeZaloId) return <EmptyState icon={<CloudIcon className="w-4 h-4" />} title={tr('Chọn đúng 1 tài khoản')} subtitle={tr('Vui lòng chọn chính xác 1 tài khoản để xem nhãn trên Zalo.')} />;
+  if (!isConnected) return <EmptyState icon={<PluginIcon className="w-4 h-4" />} title={tr('Tài khoản chưa kết nối')} subtitle={tr('Vui lòng kết nối tài khoản để xem nhãn Zalo.')} />;
+  if (loading) return <PageLoading variant="skeleton" skeletonVariant="table" />;
+  if (!labels.length) return (
+    <div className="text-center py-14">
+      <p className="text-3xl mb-2"><TagIcon className="w-4 h-4" /></p>
+      <p className="text-muted-foreground text-sm font-medium">{tr('Chưa có nhãn trên Zalo')}</p>
+      <button onClick={onRefresh} className="mt-3 text-xs text-blue-400 hover:text-blue-300 underline">{tr('Tải lại')}</button>
+    </div>
+  );
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 pb-1">
+        <span className="text-xs text-muted-foreground">{trx('{{count}} nhãn trên Zalo', { count: labels.length })}</span>
+        <div className="flex-1"/>
+        {onSyncToLocal && (
+          <button onClick={onSyncToLocal}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-card hover:bg-muted border border-border rounded-lg text-xs text-foreground/80 hover:text-foreground transition-colors">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/>
+              <path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/>
+            </svg>
+            {tr('Đồng bộ về Local')}
+          </button>
+        )}
+        {onEdit && (
+          <button onClick={onEdit}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs text-white transition-colors">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            {tr('Chỉnh sửa nhãn Zalo')}
+          </button>
+        )}
+      </div>
+      {labels.map((label: any, idx: number) => (
+        <div key={label.id ?? idx} className={`bg-card border rounded-xl p-3 transition-colors ${editingIdx === idx ? 'border-blue-600/50' : 'border-blue-900/30 hover:border-blue-700/40'}`}>
+          {editingIdx === idx ? (
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-2">
+                <input type="text" value={editForm.text} onChange={e => setEditForm(f => ({ ...f, text: e.target.value }))}
+                  placeholder={tr('Tên nhãn...')} autoFocus
+                  className="flex-1 bg-muted text-foreground text-sm rounded-lg px-3 py-1.5 border border-input focus:border-blue-500 outline-none" />
+                <input type="text" value={editForm.emoji} onChange={e => setEditForm(f => ({ ...f, emoji: e.target.value }))}
+                  className="w-12 bg-muted text-foreground text-sm rounded-lg px-2 py-1.5 border border-input focus:border-blue-500 outline-none text-center text-base" maxLength={2} title={tr('Emoji')} />
+                <input type="color" value={editForm.color} onChange={e => setEditForm(f => ({ ...f, color: e.target.value }))}
+                  className="h-8 w-10 rounded cursor-pointer bg-transparent border border-input" title={tr('Màu nhãn')} />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-muted-foreground">{tr('Xem trước:')}</span>
+                <div className="px-2 py-1 rounded-lg flex items-center gap-1 text-xs" style={{ backgroundColor: editForm.color }}>
+                  <span>{editForm.emoji || '🏷️'}</span>
+                  <span className="font-semibold text-foreground">{editForm.text || tr('Nhãn')}</span>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setEditingIdx(null)} className="px-3 py-1 text-xs text-muted-foreground hover:text-foreground">{tr('Hủy')}</button>
+                <button onClick={() => handleSaveEdit(label)} disabled={!editForm.text.trim()}
+                  className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg disabled:opacity-40">{tr('Lưu')}</button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="px-2.5 py-1.5 rounded-xl flex items-center gap-1.5 shadow shrink-0 text-foreground"
+                style={{ backgroundColor: label.color || '#3b82f6' }}>
+                <span className="text-sm leading-none">{label.emoji || label.icon || '🏷️'}</span>
+                <span className="font-semibold text-xs text-foreground max-w-[120px] truncate">
+                  {label.text || label.name || label.title || tr('Nhãn #{{id}}', { id: label.id })}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0" />
+              <div className="flex items-center gap-0.5 shrink-0">
+                {onSaveItem && (
+                  <button onClick={() => startEdit(idx, label)} title={tr('Sửa')}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                      <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                    </svg>
+                  </button>
+                )}
+                {onDeleteItem && (
+                  <button onClick={() => onDeleteItem(label)} title={tr('Xóa')}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                      <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                    </svg>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Modal: Label ─────────────────────────────────────────────────────────────
+function LabelModal({ initialData, accounts, filterAccounts, onClose, onSave }: {
+  initialData: LocalLabel | null;
+  accounts: AccountInfo[];
+  filterAccounts: string[];
+  onClose: () => void;
+  onSave: (data: Partial<LocalLabel>) => void;
+}) {
+  const [form, setForm] = useState<Partial<LocalLabel>>(
+    initialData
+      ? { ...initialData, shortcut: initialData.shortcut || '' }
+      : { name: '', color: '#3b82f6', text_color: '#ffffff', emoji: '', is_active: 1, sort_order: 0, shortcut: '' }
+  );
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const emojiButtonRef = useRef<HTMLButtonElement>(null);
+
+  const defaultPages = initialData
+    ? (initialData.page_ids ?? '').split(',').filter(Boolean)
+    : (filterAccounts.length > 0 ? filterAccounts : accounts.map(a => a.zalo_id));
+  const [selectedPages, setSelectedPages] = useState<Set<string>>(new Set(defaultPages));
+
+  useEffect(() => {
+    setForm(prev => ({ ...prev, page_ids: Array.from(selectedPages).join(',') }));
+  }, [selectedPages]);
+
+  const togglePage = (id: string) => {
+    const s = new Set(selectedPages);
+    s.has(id) ? s.delete(id) : s.add(id);
+    setSelectedPages(s);
+  };
+  const valid = form.name && form.color && selectedPages.size > 0;
+
+  return (
+    <ModalWrapper onClose={onClose}>
+      <div className="bg-card rounded-xl w-full max-w-md border border-border shadow-2xl flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-border flex justify-between items-center shrink-0">
+          <h3 className="text-foreground font-medium">{initialData ? tr('Sửa nhãn') : tr('Thêm nhãn mới')}</h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">✕</button>
+        </div>
+        <div className="p-5 space-y-4 overflow-y-auto">
+          {/* Preview */}
+          <div className="flex justify-center py-2">
+            <div className="px-4 py-2 rounded-xl flex items-center gap-2 shadow-lg" style={{ backgroundColor: form.color }}>
+              <span className="text-lg">{form.emoji}</span>
+              <span className="font-semibold text-sm" style={{ color: form.text_color }}>{form.name || tr('Tên nhãn Demo')}</span>
+              {form.shortcut && (
+                <span className="ml-1 px-1.5 py-0.5 bg-black/20 rounded text-[10px] text-foreground/70 font-mono">
+                  {form.shortcut}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Name & Emoji */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">{tr('Tên nhãn')}</label>
+              <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} maxLength={20}
+                className="w-full bg-muted text-foreground text-sm rounded-lg px-3 py-2 border border-input focus:border-blue-500 outline-none" />
+            </div>
+            <div className="relative">
+              <label className="block text-xs text-muted-foreground mb-1.5">{tr('Emoji')}</label>
+              <button
+                ref={emojiButtonRef}
+                type="button"
+                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                className={`w-full bg-muted text-foreground text-lg rounded-lg px-3 py-1.5 border transition-colors flex items-center justify-center gap-2 ${
+                  showEmojiPicker ? 'border-blue-500' : 'border-input hover:border-border-strong'
+                }`}
+              >
+                <span>{form.emoji || ''}</span>
+                <span className="text-xs text-muted-foreground">▼</span>
+              </button>
+              {showEmojiPicker && (
+                <div className="absolute top-full right-0 mt-1 z-50">
+                  <LabelEmojiPicker
+                    value={form.emoji || ''}
+                    onChange={(emoji) => {
+                      setForm({ ...form, emoji });
+                      setShowEmojiPicker(false);
+                    }}
+                    onClose={() => setShowEmojiPicker(false)}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Colors */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">{tr('Màu nền')}</label>
+              <div className="flex gap-2">
+                <input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} className="h-9 w-12 rounded cursor-pointer bg-transparent border border-input"/>
+                <input type="text" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} className="flex-1 bg-muted text-foreground/80 text-xs rounded-lg px-2 py-2 border border-input font-mono"/>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">{tr('Màu chữ')}</label>
+              <div className="flex gap-2">
+                <input type="color" value={form.text_color ?? '#ffffff'} onChange={e => setForm({ ...form, text_color: e.target.value })} className="h-9 w-12 rounded cursor-pointer bg-transparent border border-input"/>
+                <input type="text" value={form.text_color} onChange={e => setForm({ ...form, text_color: e.target.value })} className="flex-1 bg-muted text-foreground/80 text-xs rounded-lg px-2 py-2 border border-input font-mono"/>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick color presets */}
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1.5">{tr('Màu nhanh')}</label>
+            <div className="flex gap-1.5 flex-wrap">
+              {[
+                { bg: '#ef4444', text: '#ffffff' }, // Red
+                { bg: '#f97316', text: '#ffffff' }, // Orange
+                { bg: '#eab308', text: '#000000' }, // Yellow
+                { bg: '#22c55e', text: '#ffffff' }, // Green
+                { bg: '#06b6d4', text: '#ffffff' }, // Cyan
+                { bg: '#3b82f6', text: '#ffffff' }, // Blue
+                { bg: '#8b5cf6', text: '#ffffff' }, // Purple
+                { bg: '#ec4899', text: '#ffffff' }, // Pink
+                { bg: '#6b7280', text: '#ffffff' }, // Gray
+                { bg: '#1f2937', text: '#ffffff' }, // Dark
+              ].map((preset, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setForm({ ...form, color: preset.bg, text_color: preset.text })}
+                  className={`w-7 h-7 rounded-lg border-2 transition-transform hover:scale-110 ${
+                    form.color === preset.bg ? 'border-white ring-2 ring-blue-500' : 'border-transparent'
+                  }`}
+                  style={{ backgroundColor: preset.bg }}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Sort order & Status */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">{tr('Thứ tự hiển thị')}</label>
+              <input type="number" min={0} max={9999} value={form.sort_order ?? 0}
+                onChange={e => setForm({ ...form, sort_order: parseInt(e.target.value) || 0 })}
+                className="w-full bg-muted text-foreground text-sm rounded-lg px-3 py-2 border border-input focus:border-blue-500 outline-none" />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">{tr('Trạng thái')}</label>
+              <button
+                onClick={() => setForm({ ...form, is_active: (form.is_active ?? 1) === 1 ? 0 : 1 })}
+                className={`w-full py-2 rounded-lg border text-sm font-medium transition-colors
+                  ${(form.is_active ?? 1) === 1 ? 'border-green-600 bg-green-900/30 text-green-400 hover:bg-green-900/50' : 'border-input bg-muted text-muted-foreground hover:bg-accent'}`}
+              >{(form.is_active ?? 1) === 1 ? <>{trx('<0/> Hoạt động', { 0: <CheckIcon className="w-4 h-4 inline" /> })}</> : <>{trx('<0/> Tắt', { 0: <CloseIcon className="w-4 h-4 inline" /> })}</>}</button>
+            </div>
+          </div>
+
+          {/* Keyboard Shortcut */}
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1.5">
+              {trx('Phím tắt gắn/gỡ nhanh<0>(tùy chọn)</0>', { 0: <span className="text-muted-foreground ml-1" /> })}
+            </label>
+            <KeyboardShortcutInput
+              value={form.shortcut || ''}
+              onChange={(shortcut) => setForm({ ...form, shortcut })}
+              placeholder={tr('VD: Ctrl + M, Shift + 1, Alt + L...')}
+            />
+            <p className="text-[11px] text-muted-foreground mt-1.5 italic">
+              {tr('* Khi đang xem hội thoại, nhấn phím tắt để gắn/gỡ nhãn này nhanh chóng.')}
+            </p>
+          </div>
+
+          {/* Applied accounts */}
+          <div>
+            <label className="text-xs text-muted-foreground font-medium block mb-2">{tr('Tài khoản sử dụng nhãn này')}</label>
+            <AccountMultiDropdown
+              accounts={accounts}
+              selectedIds={Array.from(selectedPages)}
+              onChange={(ids) => setSelectedPages(new Set(ids))}
+              dropPosition="up"
+              fullWidth
+              placeholder={tr('Chọn tài khoản áp dụng...')}
+            />
+            {selectedPages.size === 0 && (
+              <p className="text-[11px] text-red-400/80 mt-1.5">{trx('<0/> Chọn ít nhất 1 tài khoản.', { 0: <AlertIcon className="w-4 h-4 inline" /> })}</p>
+            )}
+            <p className="text-[11px] text-muted-foreground mt-1.5 italic">{tr('* Nhãn sẽ hiện trong menu phân loại của các tài khoản được chọn.')}</p>
+          </div>
+        </div>
+        <div className="px-5 py-3 border-t border-border flex justify-end gap-2 shrink-0">
+          <button onClick={onClose} className="px-4 py-2 text-muted-foreground hover:text-foreground text-sm">{tr('Hủy')}</button>
+          <button onClick={() => onSave(form)} disabled={!valid}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg disabled:opacity-40 disabled:cursor-not-allowed">
+            {tr('Lưu nhãn')}
+          </button>
+        </div>
+      </div>
+    </ModalWrapper>
+  );
+}
+
+// ─── Modal: Zalo Labels Sync ──────────────────────────────────────────────────
+function ZaloLabelsSyncModal({ zaloCount, accountName, onClose, onSave }: {
+  zaloCount: number; accountName: string;
+  onClose: () => void; onSave: (mode: 'replace' | 'merge') => void;
+}) {
+  return (
+    <ModalWrapper onClose={onClose}>
+      <div className="bg-card rounded-xl w-full max-w-sm border border-border shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-border flex justify-between items-center">
+          <h3 className="text-foreground font-medium">{tr('Đồng bộ nhãn Zalo → Local')}</h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">✕</button>
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="bg-blue-900/20 rounded-lg px-3 py-2.5 border border-blue-800/30 space-y-0.5">
+            <p className="text-xs text-blue-300">{trx('<0/> Tài khoản: <1>{{accountName}}</1>', { 0: <CloudIcon className="w-4 h-4 inline" />, 1: <strong />, accountName })}</p>
+            <p className="text-xs text-blue-300">{trx('<0/> Số nhãn sẽ đồng bộ: <1>{{zaloCount}}</1>', { 0: <TagIcon className="w-4 h-4 inline" />, 1: <strong />, zaloCount })}</p>
+          </div>
+          <p className="text-xs text-muted-foreground font-medium pt-1">{tr('Chọn chế độ đồng bộ:')}</p>
+          <button onClick={() => onSave('merge')}
+            className="w-full bg-muted hover:bg-accent border border-input rounded-xl p-3.5 text-left transition-colors">
+            <p className="text-sm font-semibold text-foreground">{tr('➕ Thêm vào (Merge)')}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{tr('Chỉ thêm nhãn mới chưa có trong Local. Không ghi đè.')}</p>
+          </button>
+          <button onClick={() => onSave('replace')}
+            className="w-full bg-muted hover:bg-red-900/30 border border-input hover:border-red-700/50 rounded-xl p-3.5 text-left transition-colors">
+            <p className="text-sm font-semibold text-red-300">{trx('<0/> Thay thế hoàn toàn (Replace)', { 0: <RefreshIcon className="w-4 h-4 inline" /> })}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{tr('Xóa toàn bộ Nhãn Local của tài khoản và thay bằng nhãn từ Zalo.')}</p>
+          </button>
+        </div>
+        <div className="px-5 py-3 border-t border-border flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-muted-foreground hover:text-foreground text-sm">{tr('Hủy')}</button>
+        </div>
+      </div>
+    </ModalWrapper>
+  );
+}
+
+// ─── Modal: Zalo Labels Edit ──────────────────────────────────────────────────
+function ZaloLabelsEditModal({ zaloId, accountName, initialLabels, buildAuth, onClose, onSaved }: {
+  zaloId: string; accountName: string; initialLabels: any[];
+  buildAuth: (zaloId: string) => { cookies: any; imei: any; userAgent: any } | null;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const [labels, setLabels] = useState<any[]>(initialLabels.map(l => ({ ...l })));
+  const [version, setVersion] = useState<number>(0);
+  const [saving, setSaving] = useState(false);
+  const [editIdx, setEditIdx] = useState<number | null>(null);
+  const [addingNew, setAddingNew] = useState(false);
+  const [newLabel, setNewLabel] = useState({ name: '', color: '#3b82f6', icon: '🏷️' });
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const auth = buildAuth(zaloId);
+    if (!auth) return;
+    ipc.zalo?.getLabels({ auth }).then(res => {
+      if (res?.success) {
+        const raw = res.response;
+        const ver: number = raw?.version ?? raw?.ver ?? raw?.v ?? 0;
+        setVersion(ver);
+      }
+    }).catch(() => {});
+  }, []);
+
+  const handleDeleteLabel = (idx: number) => {
+    setLabels(prev => prev.filter((_, i) => i !== idx));
+    if (editIdx === idx) setEditIdx(null);
+  };
+
+  const handleFieldChange = (idx: number, field: string, value: string) => {
+    setLabels(prev => prev.map((l, i) => i !== idx ? l : { ...l, [field]: value }));
+  };
+
+  const handleAddNew = () => {
+    if (!newLabel.name.trim()) return;
+    setLabels(prev => [...prev, { id: -(Date.now()), text: newLabel.name.trim(), color: newLabel.color, emoji: newLabel.icon, icon: newLabel.icon, conversations: [] }]);
+    setNewLabel({ name: '', color: '#3b82f6', icon: '🏷️' });
+    setAddingNew(false);
+  };
+
+  const handleSave = async () => {
+    const auth = buildAuth(zaloId);
+    if (!auth) return;
+    setSaving(true); setSaveError(null);
+    try {
+      const labelData = labels.map(l => ({ ...l, id: (l.id ?? 0) < 0 ? undefined : l.id }));
+      const res = await ipc.zalo?.updateLabels({ auth, labelData, version });
+      if (res?.success) { onSaved(); }
+      else { setSaveError(res?.error || tr('Cập nhật nhãn Zalo thất bại')); }
+    } catch (err: any) {
+      setSaveError(err?.message || tr('Lỗi không xác định'));
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <ModalWrapper onClose={onClose}>
+      <div className="bg-card rounded-xl w-full max-w-lg border border-border shadow-2xl flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-border flex justify-between items-center shrink-0">
+          <h3 className="text-foreground font-medium">{trx('<0/> Chỉnh sửa nhãn Zalo', { 0: <EditIcon className="w-4 h-4 inline" /> })}</h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">✕</button>
+        </div>
+        <div className="px-5 py-2.5 border-b border-border/50 bg-blue-900/10 shrink-0">
+          <p className="text-xs text-blue-300 flex items-center gap-1.5">
+            {trx('<0><1/></0> Tài khoản: <2>{{accountName}}</2><3>ver {{version}}</3>', { 0: <span />, 1: <CloudIcon className="w-4 h-4 inline" />, 2: <strong />, accountName, 3: <span className="ml-auto text-[11px] text-muted-foreground font-mono" />, version })}
+          </p>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-2 min-h-0">
+          {labels.length === 0 && !addingNew && (
+            <div className="text-center py-8 text-muted-foreground text-sm">{tr('Chưa có nhãn nào. Nhấn "Thêm nhãn mới" để tạo.')}</div>
+          )}
+          {labels.map((label, idx) => (
+            <div key={idx} className={`bg-card border rounded-xl p-3 transition-colors ${editIdx === idx ? 'border-blue-600/50' : 'border-border/80'}`}>
+              {editIdx === idx ? (
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-2">
+                    <input type="text" value={label.text || label.name || ''}
+                      onChange={e => { handleFieldChange(idx, 'text', e.target.value); handleFieldChange(idx, 'name', e.target.value); }}
+                      placeholder={tr('Tên nhãn...')} autoFocus
+                      className="flex-1 bg-muted text-foreground text-sm rounded-lg px-3 py-1.5 border border-input focus:border-blue-500 outline-none" />
+                    <input type="text" value={label.emoji || label.icon || '🏷️'}
+                      onChange={e => { handleFieldChange(idx, 'emoji', e.target.value); handleFieldChange(idx, 'icon', e.target.value); }}
+                      className="w-12 bg-muted text-foreground text-sm rounded-lg px-2 py-1.5 border border-input focus:border-blue-500 outline-none text-center text-base" maxLength={2} title={tr('Emoji')} />
+                    <input type="color" value={label.color || '#3b82f6'}
+                      onChange={e => handleFieldChange(idx, 'color', e.target.value)}
+                      className="h-8 w-10 rounded cursor-pointer bg-transparent border border-input" title={tr('Màu nhãn')} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-muted-foreground">{tr('Xem trước:')}</span>
+                    <div className="px-2 py-1 rounded-lg flex items-center gap-1 text-xs" style={{ backgroundColor: label.color || '#3b82f6' }}>
+                      <span>{label.emoji || label.icon || '🏷️'}</span>
+                      <span className="font-semibold text-foreground">{label.text || label.name || tr('Nhãn')}</span>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button onClick={() => setEditIdx(null)} className="px-3 py-1 text-xs text-muted-foreground hover:text-foreground">{tr('Xong')}</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <div className="px-2.5 py-1.5 rounded-xl flex items-center gap-1.5 shadow shrink-0 text-foreground" style={{ backgroundColor: label.color || '#3b82f6' }}>
+                    <span className="text-sm leading-none">{label.emoji || label.icon || '🏷️'}</span>
+                    <span className="font-semibold text-xs text-foreground max-w-[120px] truncate">
+                      {label.text || label.name || label.title || tr('Nhãn #{{id}}', { id: label.id })}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0" />
+                  <button onClick={() => setEditIdx(idx)} title={tr('Sửa')}
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                      <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                    </svg>
+                  </button>
+                  <button onClick={() => handleDeleteLabel(idx)} title={tr('Xóa')}
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                      <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                    </svg>
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+          {addingNew ? (
+            <div className="bg-card border border-blue-600/40 rounded-xl p-3 space-y-2.5">
+              <p className="text-xs text-blue-400 font-medium flex items-center gap-1">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                {tr('Nhãn mới')}
+              </p>
+              <div className="flex items-center gap-2">
+                <input type="text" value={newLabel.name}
+                  onChange={e => setNewLabel(p => ({ ...p, name: e.target.value }))}
+                  placeholder={tr('Tên nhãn...')} autoFocus
+                  onKeyDown={e => e.key === 'Enter' && handleAddNew()}
+                  className="flex-1 bg-muted text-foreground text-sm rounded-lg px-3 py-1.5 border border-input focus:border-blue-500 outline-none" />
+                <input type="text" value={newLabel.icon}
+                  onChange={e => setNewLabel(p => ({ ...p, icon: e.target.value }))}
+                  className="w-12 bg-muted text-foreground text-sm rounded-lg px-2 py-1.5 border border-input focus:border-blue-500 outline-none text-center text-base" maxLength={2} title={tr('Emoji')} />
+                <input type="color" value={newLabel.color}
+                  onChange={e => setNewLabel(p => ({ ...p, color: e.target.value }))}
+                  className="h-8 w-10 rounded cursor-pointer bg-transparent border border-input" title={tr('Màu nhãn')} />
+              </div>
+              {newLabel.name && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground">{tr('Xem trước:')}</span>
+                  <div className="px-2 py-1 rounded-lg flex items-center gap-1 text-xs" style={{ backgroundColor: newLabel.color }}>
+                    <span>{newLabel.icon}</span>
+                    <span className="font-semibold text-foreground">{newLabel.name}</span>
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <button onClick={() => { setAddingNew(false); setNewLabel({ name: '', color: '#3b82f6', icon: '🏷️' }); }}
+                  className="px-3 py-1 text-xs text-muted-foreground hover:text-foreground">{tr('Hủy')}</button>
+                <button onClick={handleAddNew} disabled={!newLabel.name.trim()}
+                  className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg disabled:opacity-40">{tr('Thêm')}</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setAddingNew(true)}
+              className="w-full py-2.5 border-2 border-dashed border-border hover:border-blue-600/50 text-muted-foreground hover:text-blue-400 rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              {tr('Thêm nhãn mới')}
+            </button>
+          )}
+        </div>
+        {saveError && (
+          <div className="mx-5 mb-2 px-3 py-2 bg-red-950 border border-red-800 rounded-lg text-xs text-red-300 shrink-0"><CloseIcon className="w-4 h-4 inline" /> {saveError}</div>
+        )}
+        <div className="px-5 py-3 border-t border-border flex justify-between items-center shrink-0">
+          <span className="text-[11px] text-muted-foreground">{trx('{{count}} nhãn', { count: labels.length })}</span>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-muted-foreground hover:text-foreground text-sm">{tr('Hủy')}</button>
+            <button onClick={handleSave} disabled={saving}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg disabled:opacity-40 flex items-center gap-2">
+              {saving && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+              {saving ? tr('Đang lưu...') : tr('Lưu lên Zalo')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </ModalWrapper>
+  );
+}
+
+// ─── Modal: Clone Labels A → B ────────────────────────────────────────────────
+function CloneLabelsModal({ accounts, onClose, onSave }: {
+  accounts: AccountInfo[]; onClose: () => void;
+  onSave: (source: string, target: string) => void;
+}) {
+  const [source, setSource] = useState(accounts[0]?.zalo_id ?? '');
+  const [target, setTarget] = useState(accounts.length > 1 ? accounts[1].zalo_id : '');
+  const sourceOptions: AccountOption[] = accounts.map(a => ({ id: a.zalo_id, name: a.full_name || a.zalo_id, phone: a.phone, avatarUrl: a.avatar_url }));
+  const targetOptions: AccountOption[] = accounts.filter(a => a.zalo_id !== source).map(a => ({ id: a.zalo_id, name: a.full_name || a.zalo_id, phone: a.phone, avatarUrl: a.avatar_url }));
+
+  useEffect(() => {
+    if (target === source) {
+      const next = accounts.find(a => a.zalo_id !== source);
+      setTarget(next?.zalo_id ?? '');
+    }
+  }, [source]);
+
+  const valid = source && target && source !== target;
+
+  return (
+    <ModalWrapper onClose={onClose}>
+      <div className="bg-card rounded-xl w-full max-w-sm border border-border shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-border flex justify-between items-center">
+          <h3 className="text-foreground font-medium">{tr('Sao chép nhãn')}</h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">✕</button>
+        </div>
+        <div className="p-5 space-y-4">
+          <p className="text-xs text-muted-foreground bg-muted rounded-lg px-3 py-2 border border-input">{trx('<0/> Sao chép toàn bộ Nhãn Local từ tài khoản nguồn sang tài khoản đích.', { 0: <ClipboardListIcon className="w-4 h-4 inline" /> })}
+          </p>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1.5">{tr('Từ tài khoản (Nguồn)')}</label>
+            <AccountSelectorDropdown position="up-left" fullWidth options={sourceOptions} activeId={source} onSelect={setSource} placeholder={tr('Chọn tài khoản nguồn...')} />
+          </div>
+          <div className="flex justify-center text-xl text-muted-foreground">⬇️</div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1.5">{tr('Sang tài khoản (Đích)')}</label>
+            {targetOptions.length === 0
+              ? <p className="text-xs text-muted-foreground italic px-2">{tr('Không có tài khoản đích khả dụng')}</p>
+              : <AccountSelectorDropdown position="up-left" fullWidth options={targetOptions} activeId={target} onSelect={setTarget} placeholder={tr('Chọn tài khoản đích...')} />
+            }
+          </div>
+          <div className="bg-yellow-900/20 border border-yellow-800/30 rounded-lg px-3 py-2">
+            <p className="text-xs text-yellow-400/90">{trx('<0/> Nhãn hiện có ở tài khoản đích sẽ bị <1>ghi đè hoàn toàn</1>.', { 0: <AlertIcon className="w-4 h-4 inline" />, 1: <strong /> })}</p>
+          </div>
+        </div>
+        <div className="px-5 py-3 border-t border-border flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-muted-foreground hover:text-foreground text-sm">{tr('Hủy')}</button>
+          <button onClick={() => onSave(source, target)} disabled={!valid}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg disabled:opacity-40 disabled:cursor-not-allowed">{trx('<0/> Sao chép nhãn', { 0: <ClipboardListIcon className="w-4 h-4 inline" /> })}
+          </button>
+        </div>
+      </div>
+    </ModalWrapper>
+  );
+}
+
+// ─── Help Modal ───────────────────────────────────────────────────────────────
+function LabelHelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]" onClick={onClose}>
+      <div className="bg-card rounded-xl border border-border p-6 max-w-lg w-full mx-4 shadow-2xl relative" onClick={e => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute top-4 right-4 text-muted-foreground hover:text-foreground">✕</button>
+        <h3 className="text-lg font-bold text-foreground mb-4">{trx('<0/> Hướng dẫn - Quản lý nhãn', { 0: <TagIcon className="w-4 h-4 inline" /> })}</h3>
+
+        {/* Comparison table */}
+        <div className="grid grid-cols-2 gap-3 mb-5 text-xs">
+          {/* Local */}
+          <div className="bg-blue-950/40 border border-blue-800/40 rounded-xl p-3.5">
+            <p className="font-bold text-blue-400 mb-2.5 flex items-center gap-1.5">{trx('<0/> Local <1>Khuyến nghị</1>', { 0: <HardDriveIcon className="w-4 h-4 inline" />, 1: <span className="text-[11px] font-normal text-blue-500/70 bg-blue-900/30 px-1.5 py-0.5 rounded" /> })}</p>
+            <ul className="space-y-1.5 text-foreground/80">
+              <li className="flex items-start gap-1.5"><span className="text-green-400 mt-0.5 shrink-0">✓</span><span>{trx('<0>Không giới hạn</0> số lượng nhãn tạo ra', { 0: <strong className="text-foreground" /> })}</span></li>
+              <li className="flex items-start gap-1.5"><span className="text-green-400 mt-0.5 shrink-0">✓</span><span>{trx('<0>Không giới hạn</0> số nhãn gắn vào 1 hội thoại', { 0: <strong className="text-foreground" /> })}</span></li>
+              <li className="flex items-start gap-1.5"><span className="text-green-400 mt-0.5 shrink-0">✓</span><span>{tr('Dùng chung cho nhiều tài khoản')}</span></li>
+              <li className="flex items-start gap-1.5"><span className="text-green-400 mt-0.5 shrink-0">✓</span><span>{tr('Tuỳ chỉnh màu sắc, emoji, thứ tự')}</span></li>
+              <li className="flex items-start gap-1.5"><span className="text-yellow-500 mt-0.5 shrink-0">−</span><span className="text-muted-foreground">{tr('Không đồng bộ điện thoại Zalo')}</span></li>
+            </ul>
+          </div>
+          {/* Zalo */}
+          <div className="bg-muted border border-border/60 rounded-xl p-3.5">
+            <p className="font-bold text-muted-foreground mb-2.5"><CloudIcon className="w-4 h-4 inline" /> Zalo</p>
+            <ul className="space-y-1.5 text-muted-foreground">
+              <li className="flex items-start gap-1.5"><span className="text-red-400 mt-0.5 shrink-0">✗</span><span>{trx('<0>Chỉ gắn được 1 nhãn</0> vào 1 hội thoại', { 0: <strong className="text-red-300" /> })}</span></li>
+              <li className="flex items-start gap-1.5"><span className="text-red-400 mt-0.5 shrink-0">✗</span><span>{tr('Số lượng nhãn tạo ra bị giới hạn')}</span></li>
+              <li className="flex items-start gap-1.5"><span className="text-green-400 mt-0.5 shrink-0">✓</span><span className="text-muted-foreground">{tr('Đồng bộ trên điện thoại Zalo')}</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <div className="border-t border-border pt-4 space-y-1.5 text-xs text-muted-foreground">
+          <p className="text-foreground/80 font-semibold mb-2">{trx('<0/> Các tính năng', { 0: <ClipboardListIcon className="w-4 h-4 inline" /> })}</p>
+          <p>{trx('<0/> <1>Local:</1> Tạo/sửa/xóa nhãn, gắn nhiều nhãn vào 1 hội thoại, dùng chung nhiều tài khoản.', { 0: <HardDriveIcon className="w-4 h-4 inline" />, 1: <strong className="text-foreground/80" /> })}</p>
+          <p>{trx('<0/> <1>Zalo:</1> Xem & quản lý nhãn trực tiếp trên server Zalo. Cần tài khoản kết nối.', { 0: <CloudIcon className="w-4 h-4 inline" />, 1: <strong className="text-foreground/80" /> })}</p>
+          <p>{trx('<0/> <1>Đồng bộ về Local:</1> Kéo nhãn Zalo về Local (Merge hoặc Replace).', { 0: <InboxIcon className="w-4 h-4 inline" />, 1: <strong className="text-foreground/80" /> })}</p>
+          <p>{trx('<0/> <1>Sao chép:</1> Copy toàn bộ Nhãn Local từ tài khoản A sang B.', { 0: <ClipboardListIcon className="w-4 h-4 inline" />, 1: <strong className="text-foreground/80" /> })}</p>
+          <p>{trx('↕️ <0>Kéo thả:</0> Kéo icon ⠿ để sắp xếp thứ tự hiển thị.', { 0: <strong className="text-foreground/80" /> })}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+interface Props {
+  accounts: AccountInfo[];
+  filterAccounts: string[];
+  searchText: string;
+
+}
+
+export default function LabelSettings({ accounts, filterAccounts, searchText }: Props) {
+  const { showNotification } = useAppStore();
+  const [labelSource, setLabelSource] = useState<LabelSource>('local');
+
+  // Remote labels are a Zalo API feature. Keep a standalone Telegram/Facebook
+  // settings context on Local and do not issue a Zalo labels request.
+  const hideZaloTab = filterAccounts.length > 0 && filterAccounts.every(id => {
+    const acc = accounts.find(a => a.zalo_id === id);
+    return !isZalo(acc?.channel);
+  });
+  const effectiveLabelSource: LabelSource = hideZaloTab ? 'local' : labelSource;
+
+  useEffect(() => {
+    if (hideZaloTab && labelSource !== 'local') setLabelSource('local');
+  }, [hideZaloTab, labelSource]);
+
+  const [localLabels, setLocalLabels] = useState<LocalLabel[]>([]);
+  const [zaloLabels, setZaloLabels] = useState<any[]>([]);
+  const [zaloLabelsLoading, setZaloLabelsLoading] = useState(false);
+
+  // Modals
+  const [labelModal, setLabelModal] = useState<{ open: boolean; data: LocalLabel | null }>({ open: false, data: null });
+  const [zaloLabelsEditModal, setZaloLabelsEditModal] = useState(false);
+  const [zaloLabelsSyncModal, setZaloLabelsSyncModal] = useState(false);
+  const [cloneLabelModal, setCloneLabelModal] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+
+  // Drag & drop
+  const labelDragFromRef = useRef<number | null>(null);
+  const labelDragOverRef = useRef<number | null>(null);
+  const [labelDragging, setLabelDragging] = useState<number | null>(null);
+  const [labelDragOver, setLabelDragOver] = useState<number | null>(null);
+
+  // For zalo operations: only when exactly 1 account is selected
+  const activeZaloId = filterAccounts.length === 1 ? filterAccounts[0] : null;
+  const selectedAccount = accounts.find(a => a.zalo_id === activeZaloId);
+  const isConnected = selectedAccount?.isConnected ?? false;
+
+  // ─── Helpers ──────────────────────────────────────────────────────────────
+  const buildAuth = (zaloId: string) => {
+    const acc = accounts.find(a => a.zalo_id === zaloId);
+    if (!acc) return null;
+    return buildZaloAuth(acc);
+  };
+
+  const getAccountName = (zaloId: string) => {
+    if (!zaloId) return 'Unknown';
+    const acc = accounts.find(a => a.zalo_id === zaloId);
+    return acc ? (acc.full_name || acc.zalo_id || zaloId) : zaloId;
+  };
+
+  const getAccountPhone = (zaloId: string) => accounts.find(a => a.zalo_id === zaloId)?.phone || '';
+  const getAccountAvatar = (zaloId: string) => accounts.find(a => a.zalo_id === zaloId)?.avatar_url;
+
+  // ─── Fetch ────────────────────────────────────────────────────────────────
+  const fetchLocalLabels = async () => {
+    try {
+      const res = await DataAccessor.getLocalLabels({});
+      if (res?.success) setLocalLabels(res.labels || []);
+    } catch (err) { console.error(err); }
+  };
+
+  const fetchZaloLabels = async (zaloId: string) => {
+    const auth = buildAuth(zaloId);
+    if (!auth) return;
+    setZaloLabelsLoading(true); setZaloLabels([]);
+    try {
+      const res = await ipc.zalo?.getLabels({ auth });
+      if (res?.success) {
+        const raw = res.response;
+        const arr = Array.isArray(raw?.labelData) ? raw.labelData : Array.isArray(raw) ? raw : [];
+        setZaloLabels(arr);
+      } else {
+        showNotification(res?.error || tr('Không thể tải nhãn từ Zalo'), 'error');
+      }
+    } catch (err: any) {
+      showNotification(err?.message || tr('Không thể tải nhãn từ Zalo'), 'error');
+    } finally { setZaloLabelsLoading(false); }
+  };
+
+  useEffect(() => { fetchLocalLabels(); }, []);
+
+  useEffect(() => {
+    if (effectiveLabelSource === CHANNEL.ZALO && activeZaloId && isConnected) {
+      fetchZaloLabels(activeZaloId);
+    } else if (effectiveLabelSource === CHANNEL.ZALO) {
+      setZaloLabels([]);
+    }
+  }, [labelSource, activeZaloId]);
+
+  // ─── Filtered ─────────────────────────────────────────────────────────────
+  const filteredLabels = useMemo(() => {
+    const q = searchText.toLowerCase();
+    return localLabels
+      .filter(l => {
+        if (filterAccounts.length > 0) {
+          const pageIds = (l.page_ids || '').split(',').filter(Boolean);
+          if (!filterAccounts.some(id => pageIds.includes(id))) return false;
+        }
+        return !q || l.name.toLowerCase().includes(q);
+      })
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
+  }, [localLabels, filterAccounts, searchText]);
+
+  // ─── Label Actions ────────────────────────────────────────────────────────
+  const handleDeleteLabel = async (id: number) => {
+    const ok = await showConfirm({ title: tr('Xóa nhãn?'), message: tr('Nhãn sẽ bị gỡ khỏi tất cả hội thoại.'), variant: 'danger' });
+    if (!ok) return;
+    await DataAccessor.deleteLocalLabel({ id });
+    fetchLocalLabels(); showNotification(tr('Đã xóa nhãn'));
+  };
+
+  const handleSaveLabel = async (data: Partial<LocalLabel>) => {
+    if (!data.name || !data.color) return;
+    await (DataAccessor.upsertLocalLabel as any)({
+      label: {
+        id: data.id, name: data.name, color: data.color,
+        textColor: data.text_color, emoji: data.emoji || '',
+        pageIds: data.page_ids || '',
+        isActive: data.is_active ?? 1,
+        sortOrder: data.sort_order ?? 0,
+        shortcut: data.shortcut || '',
+      },
+    });
+    setLabelModal({ open: false, data: null });
+    fetchLocalLabels(); showNotification(tr('Đã lưu nhãn'));
+  };
+
+  const handleToggleLabelActive = async (item: LocalLabel) => {
+    const newVal = (item.is_active ?? 1) === 1 ? 0 : 1;
+    await DataAccessor.setLocalLabelActive({ id: item.id, isActive: newVal });
+    fetchLocalLabels();
+  };
+
+  const handleDeleteZaloLabel = async (label: any) => {
+    if (!activeZaloId) return;
+    const ok = await showConfirm({ title: tr('Xóa nhãn Zalo?'), message: tr('Nhãn sẽ bị xóa trực tiếp trên Zalo.'), variant: 'danger' });
+    if (!ok) return;
+    const auth = buildAuth(activeZaloId);
+    if (!auth) return;
+    try {
+      const vRes = await ipc.zalo?.getLabels({ auth });
+      const raw = vRes?.response;
+      const ver: number = raw?.version ?? raw?.ver ?? raw?.v ?? 0;
+      const updatedLabels = zaloLabels.filter(l => l.id !== label.id);
+      const res = await ipc.zalo?.updateLabels({ auth, labelData: updatedLabels, version: ver });
+      if (res?.success) { fetchZaloLabels(activeZaloId); showNotification(tr('Đã xóa nhãn Zalo')); }
+      else showNotification(res?.error || tr('Xóa thất bại'), 'error');
+    } catch (err: any) { showNotification(err?.message || tr('Xóa thất bại'), 'error'); }
+  };
+
+  const handleSaveZaloLabel = async (label: any, newData: any) => {
+    if (!activeZaloId) return;
+    const auth = buildAuth(activeZaloId);
+    if (!auth) return;
+    try {
+      const vRes = await ipc.zalo?.getLabels({ auth });
+      const raw = vRes?.response;
+      const ver: number = raw?.version ?? raw?.ver ?? raw?.v ?? 0;
+      const updatedLabels = zaloLabels.map(l => l.id === label.id ? { ...l, ...newData } : l);
+      const res = await ipc.zalo?.updateLabels({ auth, labelData: updatedLabels, version: ver });
+      if (res?.success) { fetchZaloLabels(activeZaloId); showNotification(tr('Đã cập nhật nhãn Zalo')); }
+      else showNotification(res?.error || tr('Cập nhật thất bại'), 'error');
+    } catch (err: any) { showNotification(err?.message || tr('Cập nhật thất bại'), 'error'); }
+  };
+
+  const handleSyncZaloLabelsToLocal = async (mode: 'replace' | 'merge') => {
+    if (!zaloLabels.length || !activeZaloId) return;
+    const count = await syncZaloLabelsToLocalDB({
+      zaloLabels,
+      activeZaloId,
+      mode,
+      existingLocalLabels: localLabels,
+    });
+    fetchLocalLabels();
+    showNotification(tr('Đã đồng bộ {{count}} nhãn từ Zalo về Local', { count }));
+  };
+
+  const handleCloneLocalLabels = async (sourceId: string, targetId: string) => {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    const res = await DataAccessor.cloneLocalLabels({ sourceZaloId: sourceId, targetZaloId: targetId });
+    if (res?.success) {
+      fetchLocalLabels(); setCloneLabelModal(false);
+      showNotification(tr('Đã sao chép {{v1}} nhãn', { v1: (res as any).count ?? '' }));
+    } else { showNotification(res?.error || tr('Sao chép thất bại'), 'error'); }
+  };
+
+  // ─── Drag Reorder ─────────────────────────────────────────────────────────
+  const handleLabelReorder = async (items: LocalLabel[]) => {
+    const from = labelDragFromRef.current;
+    const over = labelDragOverRef.current;
+    labelDragFromRef.current = null; labelDragOverRef.current = null;
+    setLabelDragging(null); setLabelDragOver(null);
+    if (from === null || over === null || from === over) return;
+    const reordered = [...items];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(over, 0, moved);
+    for (let i = 0; i < reordered.length; i++) {
+      await DataAccessor.setLocalLabelOrder({ id: reordered[i].id, order: i + 1 });
+    }
+    fetchLocalLabels();
+  };
+
+  // ─── Render ───────────────────────────────────────────────────────────────
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Sub-tabs + Actions - pill style, same as the friends page */}
+      <div className="px-4 py-2.5 border-b border-border/60 flex items-center gap-2">
+        <div className="flex bg-muted rounded-lg p-1 gap-1">
+          {([
+            { id: 'local' as const, label: tr('Local') },
+            ...(!hideZaloTab ? [{ id: 'zalo' as const, label: 'Zalo' }] : []),
+          ] as const).map(src => (
+            <button key={src.id} onClick={() => setLabelSource(src.id)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap
+                ${effectiveLabelSource === src.id ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+            >{src.label}</button>
+          ))}
+        </div>
+        {/* Help button - right next to tabs */}
+        <button onClick={() => setShowHelp(true)} title={tr('Hướng dẫn sử dụng')}
+          className="p-1.5 hover:bg-muted rounded-full text-muted-foreground hover:text-primary transition-colors">
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
+        {/* Action buttons */}
+        <div className="ml-auto flex items-center gap-2">
+          {effectiveLabelSource === 'local' && (<>
+            <button onClick={() => setCloneLabelModal(true)}
+              className="bg-card hover:bg-muted text-foreground/80 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 border border-input">{trx('<0/> Sao chép', { 0: <ClipboardListIcon className="w-4 h-4 inline" /> })}
+            </button>
+            <button onClick={() => setLabelModal({ open: true, data: null })}
+              className="bg-primary hover:bg-primary-hover text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              {tr('Thêm nhãn')}
+            </button>
+          </>)}
+          {effectiveLabelSource === CHANNEL.ZALO && activeZaloId && isConnected && (
+            <button onClick={() => fetchZaloLabels(activeZaloId)}
+              className="bg-card hover:bg-muted text-foreground/80 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 border border-input">{trx('<0/> Tải lại', { 0: <RefreshIcon className="w-4 h-4 inline" /> })}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* List */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        {/* Local Labels */}
+        {effectiveLabelSource === 'local' && (
+          filteredLabels.length === 0
+            ? <EmptyState icon={<TagIcon className="w-4 h-4" />} title={tr('Chưa có nhãn')} subtitle={tr('Nhấn "Thêm nhãn" để tạo nhãn phân loại hội thoại.')} />
+            : filteredLabels.map((item, idx) => (
+              <div key={item.id} draggable
+                onDragStart={() => { labelDragFromRef.current = idx; labelDragOverRef.current = idx; setLabelDragging(idx); }}
+                onDragEnter={() => { labelDragOverRef.current = idx; setLabelDragOver(idx); }}
+                onDragOver={e => e.preventDefault()}
+                onDragEnd={() => handleLabelReorder(filteredLabels)}
+                className={labelDragOver === idx && labelDragging !== idx ? 'ring-2 ring-primary/50 rounded-xl' : ''}
+              >
+                <LabelRow item={item} getAccountName={getAccountName} getAccountPhone={getAccountPhone} getAccountAvatar={getAccountAvatar}
+                  onEdit={() => setLabelModal({ open: true, data: item })}
+                  onDelete={() => handleDeleteLabel(item.id)}
+                  onToggleActive={() => handleToggleLabelActive(item)}
+                  isDragging={labelDragging === idx}
+                />
+              </div>
+            ))
+        )}
+
+        {/* Zalo Labels */}
+        {effectiveLabelSource === CHANNEL.ZALO && (
+          <ZaloLabelsSection
+            activeZaloId={activeZaloId}
+            isConnected={isConnected}
+            loading={zaloLabelsLoading}
+            labels={zaloLabels}
+            onRefresh={() => activeZaloId && fetchZaloLabels(activeZaloId)}
+            onSyncToLocal={zaloLabels.length > 0 ? () => setZaloLabelsSyncModal(true) : undefined}
+            onEdit={zaloLabels.length > 0 ? () => setZaloLabelsEditModal(true) : undefined}
+            onDeleteItem={activeZaloId && isConnected ? handleDeleteZaloLabel : undefined}
+            onSaveItem={activeZaloId && isConnected ? handleSaveZaloLabel : undefined}
+          />
+        )}
+      </div>
+
+      {/* Modals */}
+      {showHelp && <LabelHelpModal onClose={() => setShowHelp(false)} />}
+      {labelModal.open && (
+        <LabelModal
+          initialData={labelModal.data}
+          accounts={accounts}
+          filterAccounts={filterAccounts}
+          onClose={() => setLabelModal({ open: false, data: null })}
+          onSave={handleSaveLabel}
+        />
+      )}
+      {cloneLabelModal && (
+        <CloneLabelsModal accounts={accounts} onClose={() => setCloneLabelModal(false)} onSave={handleCloneLocalLabels} />
+      )}
+      {zaloLabelsEditModal && activeZaloId && (
+        <ZaloLabelsEditModal
+          zaloId={activeZaloId} accountName={getAccountName(activeZaloId)}
+          initialLabels={zaloLabels} buildAuth={buildAuth}
+          onClose={() => setZaloLabelsEditModal(false)}
+          onSaved={() => { setZaloLabelsEditModal(false); fetchZaloLabels(activeZaloId); showNotification(tr('Đã cập nhật nhãn Zalo')); }}
+        />
+      )}
+      {zaloLabelsSyncModal && activeZaloId && (
+        <ZaloLabelsSyncModal
+          zaloCount={zaloLabels.length}
+          accountName={getAccountName(activeZaloId)}
+          onClose={() => setZaloLabelsSyncModal(false)}
+          onSave={(mode) => { setZaloLabelsSyncModal(false); handleSyncZaloLabelsToLocal(mode); }}
+        />
+      )}
+    </div>
+  );
+}

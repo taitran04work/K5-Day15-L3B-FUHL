@@ -1,0 +1,334 @@
+import { ipcMain } from 'electron';
+import DatabaseService from '../../../src/services/database/DatabaseService';
+import CRMQueueService from '../../../src/services/crm/CRMQueueService';
+import EventBroadcaster from '../../../src/services/event/EventBroadcaster';
+import WorkspaceManager from '../../../src/utils/app/WorkspaceManager';
+import Logger from '../../../src/utils/Logger';
+import { proxyToBossWithResult, uploadEmployeeMedia } from '../network/proxyHelper';
+import { getCRMChannelDecision, validateCampaignForChannel } from '../../../src/services/crm/CRMChannelCapabilityService';
+import { cloneCampaignToAccounts } from '../../../src/services/crm/campaignClone';
+import { campaignMissingInviteGroups, type CampaignCloneParams } from '../../../src/shared/crm/campaignCopy';
+import { tr } from '../../../src/shared/i18n';
+
+function isEmployeeMode(): boolean {
+    try {
+        const activeWs = WorkspaceManager.getInstance().getActiveWorkspace();
+        if (activeWs?.type === 'remote') return true;
+    } catch {}
+    return false;
+}
+
+/**
+ * When an employee saves a campaign: images in the message template (template_message.blocks[].images) are paths on the employee's machine →
+ * uploaded to Boss and replaced by Boss paths (the send queue runs on Boss). A path that does not exist on this machine (already a
+ * Boss file when an old campaign is edited) is kept as is. If the upload fails → an error is shown, and the campaign is not saved with images Boss cannot read.
+ */
+async function uploadCampaignImagesToBoss(campaign: any, zaloId: string): Promise<{ success: true; campaign: any } | { success: false; error: string }> {
+    if (!campaign?.template_message) return { success: true, campaign };
+    let parsed: any;
+    try {
+        parsed = typeof campaign.template_message === 'string' ? JSON.parse(campaign.template_message) : campaign.template_message;
+    } catch {
+        return { success: true, campaign }; // plain-text message template, no images
+    }
+    if (!parsed?.blocks || !Array.isArray(parsed.blocks)) return { success: true, campaign };
+    let changed = false;
+    try {
+        for (const block of parsed.blocks) {
+            if (Array.isArray(block?.images) && block.images.length > 0) {
+                block.images = await uploadEmployeeMedia(block.images, zaloId);
+                changed = true;
+            }
+        }
+    } catch (err: any) {
+        Logger.warn(`[crmIpc] Upload campaign images failed: ${err.message}`);
+        return { success: false, error: tr('Không tải được ảnh chiến dịch lên Boss: {{message}}', { message: err.message }) };
+    }
+    if (!changed) return { success: true, campaign };
+    return {
+        success: true,
+        campaign: { ...campaign, template_message: typeof campaign.template_message === 'string' ? JSON.stringify(parsed) : parsed },
+    };
+}
+
+export function registerCRMIpc(): void {
+
+
+    // ─── Notes ─────────────────────────────────────────────────────────────
+    ipcMain.handle('crm:getNotes', async (_e, { zaloId, contactId }: { zaloId: string; contactId: string }) => {
+        try {
+            if (isEmployeeMode()) return { success: true, notes: [] };
+            return { success: true, notes: DatabaseService.getInstance().getCRMNotes(zaloId, contactId) };
+        }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // Employee: notes live in Boss's DB → proxy and wait for the result (id assigned by Boss, errors shown in the UI), no local copy is written
+    // (the local id ≠ Boss id; the local copy is updated by the crm:noteChanged event). It used to proxy TWICE (at the start + end
+    // handler) → each add made Boss create 2 identical notes and emit the event twice.
+    ipcMain.handle('crm:saveNote', async (_e, { zaloId, note }: { zaloId: string; note: any }) => {
+        try {
+            if (isEmployeeMode()) return await proxyToBossWithResult('crm:saveNote', { zaloId, note });
+            const id = DatabaseService.getInstance().saveCRMNote({ ...note, owner_zalo_id: zaloId });
+            if (!id) return { success: false, error: tr('Không lưu được ghi chú') };
+            DatabaseService.getInstance().save();
+            // note with id: the employee machine stores the copy by id (editing a note does not create a new note)
+            EventBroadcaster.emit('crm:noteChanged', { action: 'save', ownerZaloId: zaloId, id, note: { ...note, id } });
+            return { success: true, id };
+        } catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('crm:deleteNote', async (_e, { zaloId, noteId }: { zaloId: string; noteId: number }) => {
+        try {
+            if (isEmployeeMode()) return await proxyToBossWithResult('crm:deleteNote', { zaloId, noteId });
+            DatabaseService.getInstance().deleteCRMNote(noteId, zaloId);
+            DatabaseService.getInstance().save();
+            EventBroadcaster.emit('crm:noteChanged', { action: 'delete', ownerZaloId: zaloId, noteId });
+            return { success: true };
+        } catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // ─── Contacts ──────────────────────────────────────────────────────────
+    ipcMain.handle('crm:getContacts', async (_e, { zaloId, opts }: { zaloId: string; opts?: any }) => {
+        try {
+            if (isEmployeeMode()) return { success: true, contacts: [], total: 0 };
+            return { success: true, ...DatabaseService.getInstance().getCRMContacts(zaloId, opts || {}) };
+        }
+        catch (e: any) { return { success: false, error: e.message, contacts: [], total: 0 }; }
+    });
+
+    ipcMain.handle('crm:getContactStats', async (_e, { zaloId }: { zaloId: string }) => {
+        try {
+            if (isEmployeeMode()) return { success: true, total: 0, friendCount: 0, noteCount: 0 };
+            return { success: true, ...DatabaseService.getInstance().getContactStats(zaloId) };
+        }
+        catch (e: any) { return { success: false, error: e.message, total: 0, friendCount: 0, noteCount: 0 }; }
+    });
+
+    // ─── Campaigns ─────────────────────────────────────────────────────────
+    ipcMain.handle('crm:getCampaigns', async (_e, { zaloId }: { zaloId: string }) => {
+        try {
+            if (isEmployeeMode()) return { success: true, campaigns: [] };
+            const capability = getCRMChannelDecision(zaloId, 'campaign');
+            if (!capability.allowed) return { success: true, campaigns: [] };
+            return { success: true, campaigns: DatabaseService.getInstance().getCRMCampaigns(zaloId) };
+        }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // Campaigns run on Boss (CRM queue). Employee: proxy and wait for the result, do NOT check or write on the local DB
+    // (the local DB has no Boss campaigns → before, clone / status change / add contact stopped at "Không tìm thấy chiến dịch" (campaign not found)
+    // and never reached Boss; saving created a local copy with an id different from Boss's). Boss checks the campaign owner
+    // (HttpRelayService.checkProxyRecordOwner), then runs these same handlers.
+    ipcMain.handle('crm:saveCampaign', async (_e, { zaloId, campaign }: { zaloId: string; campaign: any }) => {
+        try {
+            if (isEmployeeMode()) {
+                // Images in the message template are files on the employee's machine → uploaded to Boss first (the send queue runs on Boss)
+                const uploaded = await uploadCampaignImagesToBoss(campaign, zaloId);
+                if (!uploaded.success) return uploaded;
+                return await proxyToBossWithResult('crm:saveCampaign', { zaloId, campaign: uploaded.campaign });
+            }
+            const capability = validateCampaignForChannel(zaloId, campaign);
+            if (!capability.allowed) return { success: false, error: capability.reason };
+            const id = DatabaseService.getInstance().saveCRMCampaign({ ...campaign, owner_zalo_id: zaloId });
+            if (!id) return { success: false, error: tr('Không lưu được chiến dịch') };
+            DatabaseService.getInstance().save();
+            EventBroadcaster.emit('crm:campaignChanged', { action: 'save', ownerZaloId: zaloId, id, campaign: { ...campaign, id } });
+            return { success: true, id };
+        } catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('crm:deleteCampaign', async (_e, { zaloId, campaignId }: { zaloId: string; campaignId: number }) => {
+        try {
+            if (isEmployeeMode()) return await proxyToBossWithResult('crm:deleteCampaign', { zaloId, campaignId });
+            // deleteCRMCampaign deletes contacts by campaignId before deleting the campaign by owner → check the owner first
+            const existing = DatabaseService.getInstance().getCRMCampaign(campaignId);
+            if (!existing || existing.owner_zalo_id !== zaloId) return { success: false, error: tr('Không tìm thấy chiến dịch') };
+            DatabaseService.getInstance().deleteCRMCampaign(campaignId, zaloId);
+            DatabaseService.getInstance().save();
+            EventBroadcaster.emit('crm:campaignChanged', { action: 'delete', ownerZaloId: zaloId, campaignId });
+            return { success: true };
+        } catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // contactIds: copy only these contacts (e.g. filter "Đã xem, chưa phản hồi" (viewed, not replied) to send a follow-up).
+    // targetZaloIds: accounts that get a copy ("Tài khoản nhận bản sao"); missing = the owner only (services/crm/campaignClone)
+    ipcMain.handle('crm:cloneCampaign', async (_e, params: CampaignCloneParams) => {
+        try {
+            if (isEmployeeMode()) {
+                const { zaloId, campaignId, includeContacts, newName, contactIds, targetZaloIds } = params || ({} as CampaignCloneParams);
+                return await proxyToBossWithResult('crm:cloneCampaign', { zaloId, campaignId, includeContacts, newName, contactIds, targetZaloIds });
+            }
+            return cloneCampaignToAccounts(params);
+        } catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('crm:updateCampaignStatus', async (_e, { campaignId, status }: { campaignId: number; status: string }) => {
+        try {
+            if (isEmployeeMode()) return await proxyToBossWithResult('crm:updateCampaignStatus', { campaignId, status });
+            const db = DatabaseService.getInstance();
+            const existing = db.getCRMCampaign(campaignId);
+            if (!existing) return { success: false, error: tr('Không tìm thấy chiến dịch') };
+            const capability = validateCampaignForChannel(existing.owner_zalo_id, existing);
+            if (!capability.allowed) return { success: false, error: capability.reason };
+            // A copy made for another account has no invite groups (shared/crm/campaignCopy): every recipient would fail
+            if (status === 'active' && campaignMissingInviteGroups(existing)) {
+                return { success: false, error: tr('Chọn nhóm cần mời trước khi chạy chiến dịch') };
+            }
+            db.updateCRMCampaignStatus(campaignId, status as any);
+            db.save();
+            // Start/stop queue
+            const campaign = db.getCRMCampaign(campaignId);
+            if (campaign) {
+                if (status === 'active') CRMQueueService.getInstance().startForAccount(campaign.owner_zalo_id);
+                else if (status === 'paused' || status === 'done') CRMQueueService.getInstance().checkAndStopIfIdle(campaign.owner_zalo_id);
+                EventBroadcaster.emit('crm:campaignChanged', { action: 'status', ownerZaloId: campaign.owner_zalo_id, campaignId, status });
+            }
+            return { success: true };
+        } catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('crm:addCampaignContacts', async (_e, { zaloId, campaignId, contacts }: { zaloId: string; campaignId: number; contacts: any[] }) => {
+        try {
+            if (isEmployeeMode()) return await proxyToBossWithResult('crm:addCampaignContacts', { zaloId, campaignId, contacts });
+            const campaign = DatabaseService.getInstance().getCRMCampaign(campaignId);
+            if (!campaign || campaign.owner_zalo_id !== zaloId) return { success: false, error: tr('Không tìm thấy chiến dịch') };
+            const capability = validateCampaignForChannel(zaloId, campaign);
+            if (!capability.allowed) return { success: false, error: capability.reason };
+            DatabaseService.getInstance().addCampaignContacts(campaignId, zaloId, contacts);
+            DatabaseService.getInstance().save();
+            EventBroadcaster.emit('crm:campaignChanged', { action: 'contactsAdded', ownerZaloId: zaloId, campaignId });
+            return { success: true };
+        } catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('crm:getCampaignContacts', async (_e, { campaignId }: { campaignId: number }) => {
+        try { return { success: true, contacts: DatabaseService.getInstance().getCampaignContacts(campaignId) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // Campaign results: contacts sent → received / viewed / replied (shared/analytics/messageEngagement)
+    ipcMain.handle('crm:getCampaignEngagement', async (_e, { campaignId }: { campaignId: number }) => {
+        try {
+            const report = DatabaseService.getInstance().getCampaignEngagement(Number(campaignId));
+            if (!report) return { success: false, error: tr('Không tìm thấy chiến dịch') };
+            return { success: true, ...report };
+        }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // Removing a contact from a campaign: it used to delete only the local DB (employees: never reached Boss) and emitted no event
+    // → the campaign screen of Boss / other employees did not update.
+    ipcMain.handle('crm:deleteCampaignContacts', async (_e, { campaignId, contactIds }: { campaignId: number; contactIds: string[] }) => {
+        try {
+            if (isEmployeeMode()) return await proxyToBossWithResult('crm:deleteCampaignContacts', { campaignId, contactIds });
+            const campaign = DatabaseService.getInstance().getCRMCampaign(campaignId);
+            if (!campaign) return { success: false, error: tr('Không tìm thấy chiến dịch') };
+            DatabaseService.getInstance().deleteCampaignContacts(campaignId, contactIds || []);
+            EventBroadcaster.emit('crm:campaignChanged', { action: 'contactsRemoved', ownerZaloId: campaign.owner_zalo_id, campaignId });
+            return { success: true };
+        } catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('crm:deleteAllCampaignContacts', async (_e, { campaignId }: { campaignId: number }) => {
+        try {
+            if (isEmployeeMode()) return await proxyToBossWithResult('crm:deleteAllCampaignContacts', { campaignId });
+            const campaign = DatabaseService.getInstance().getCRMCampaign(campaignId);
+            if (!campaign) return { success: false, error: tr('Không tìm thấy chiến dịch') };
+            DatabaseService.getInstance().deleteAllCampaignContacts(campaignId);
+            EventBroadcaster.emit('crm:campaignChanged', { action: 'contactsRemoved', ownerZaloId: campaign.owner_zalo_id, campaignId });
+            return { success: true };
+        } catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // ─── Send Log ──────────────────────────────────────────────────────────
+    ipcMain.handle('crm:getSendLog', async (_e, { zaloId, opts }: { zaloId: string; opts?: any }) => {
+        try {
+            const capability = getCRMChannelDecision(zaloId, 'history');
+            if (!capability.allowed) return { success: true, logs: [] };
+            return { success: true, logs: DatabaseService.getInstance().getSendLog(zaloId, opts || {}) };
+        }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('crm:getCampaignStats', async (_e, { zaloId, limit }: { zaloId: string; limit?: number }) => {
+        try { return { success: true, stats: DatabaseService.getInstance().getTopCampaignStats(zaloId, limit || 10) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('crm:getActivityStats', async (_e, { zaloId, sinceTs, untilTs }: { zaloId: string; sinceTs: number; untilTs?: number }) => {
+        try { return { success: true, ...DatabaseService.getInstance().getActivityStats(zaloId, sinceTs, untilTs) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // ─── Queue status ──────────────────────────────────────────────────────────
+    ipcMain.handle('crm:getQueueStatus', async (_e, { zaloId }: { zaloId: string }) => {
+        try { return { success: true, status: CRMQueueService.getInstance().getStatus(zaloId) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // ─── Analytics / Reporting ─────────────────────────────────────────────────
+    ipcMain.handle('analytics:dashboardOverview', async (_e, { zaloId, sinceTs, untilTs, threadType }: { zaloId: string; sinceTs?: number; untilTs?: number; threadType?: number }) => {
+        try { return { success: true, ...DatabaseService.getInstance().getDashboardOverview(zaloId, sinceTs, untilTs, threadType) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('analytics:messageVolume', async (_e, { zaloId, sinceTs, untilTs, granularity, threadType }: { zaloId: string; sinceTs: number; untilTs: number; granularity: 'hour' | 'day'; threadType?: number }) => {
+        try { return { success: true, data: DatabaseService.getInstance().getMessageVolume(zaloId, sinceTs, untilTs, granularity, threadType) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('analytics:peakHours', async (_e, { zaloId, sinceTs, untilTs, threadType }: { zaloId: string; sinceTs: number; untilTs: number; threadType?: number }) => {
+        try { return { success: true, data: DatabaseService.getInstance().getPeakHoursHeatmap(zaloId, sinceTs, untilTs, threadType) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('analytics:contactGrowth', async (_e, { zaloId, sinceTs, untilTs }: { zaloId: string; sinceTs: number; untilTs: number }) => {
+        try { return { success: true, data: DatabaseService.getInstance().getContactGrowth(zaloId, sinceTs, untilTs) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('analytics:contactSegmentation', async (_e, { zaloId }: { zaloId: string }) => {
+        try { return { success: true, ...DatabaseService.getInstance().getContactSegmentation(zaloId) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('analytics:campaignComparison', async (_e, { zaloId }: { zaloId: string }) => {
+        try { return { success: true, data: DatabaseService.getInstance().getCampaignComparison(zaloId) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // Outgoing messages: 1:1 recipients in the range → received / viewed / replied
+    ipcMain.handle('analytics:outreach', async (_e, { zaloId, sinceTs, untilTs, granularity }: { zaloId: string; sinceTs: number; untilTs: number; granularity?: 'hour' | 'day' }) => {
+        try { return { success: true, ...DatabaseService.getInstance().getOutreachStats(zaloId, sinceTs, untilTs, granularity === 'hour' ? 'hour' : 'day') }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('analytics:friendRequests', async (_e, { zaloId, sinceTs, untilTs }: { zaloId: string; sinceTs: number; untilTs: number }) => {
+        try { return { success: true, ...DatabaseService.getInstance().getFriendRequestAnalytics(zaloId, sinceTs, untilTs) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // zaloIds (Reports, several accounts): one query — a workflow attached to several of them counts once.
+    ipcMain.handle('analytics:workflowAnalytics', async (_e, { zaloId, zaloIds, sinceTs, untilTs }: { zaloId?: string; zaloIds?: string[]; sinceTs: number; untilTs: number }) => {
+        try { return { success: true, ...DatabaseService.getInstance().getWorkflowAnalytics(Array.isArray(zaloIds) && zaloIds.length > 0 ? zaloIds.map(String) : zaloId, sinceTs, untilTs) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('analytics:aiAnalytics', async (_e, { sinceTs, untilTs }: { sinceTs: number; untilTs: number }) => {
+        try { return { success: true, ...DatabaseService.getInstance().getAIAnalytics(sinceTs, untilTs) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    // zaloIds (Reports, several accounts): one query — median / min / max over all their replies.
+    ipcMain.handle('analytics:responseTime', async (_e, { zaloId, zaloIds, sinceTs, untilTs, threadType }: { zaloId?: string; zaloIds?: string[]; sinceTs: number; untilTs: number; threadType?: number }) => {
+        try { return { success: true, ...DatabaseService.getInstance().getResponseTimeStats(Array.isArray(zaloIds) && zaloIds.length > 0 ? zaloIds.map(String) : zaloId, sinceTs, untilTs, threadType) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('analytics:labelUsage', async (_e, { zaloId, sinceTs, untilTs }: { zaloId: string; sinceTs: number; untilTs: number }) => {
+        try { return { success: true, ...DatabaseService.getInstance().getLabelUsageAnalytics(zaloId, sinceTs, untilTs) }; }
+        catch (e: any) { return { success: false, error: e.message }; }
+    });
+}
+

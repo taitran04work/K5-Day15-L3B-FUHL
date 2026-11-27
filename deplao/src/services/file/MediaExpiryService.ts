@@ -1,0 +1,69 @@
+/**
+ * Identifies Zalo media that has expired (Zalo no longer keeps the file):
+ *   - the CDN returns 404 / 410 (the CDN host is still alive but the file was deleted, e.g. `f20-zpc.zdn.vn` returns 404), or
+ *   - an old CDN host has been removed from DNS (e.g. `f21-zpc` / `f24-zpc.zdn.vn` → ENOTFOUND) while `chat.zalo.me`
+ *     still resolves, i.e. it is not caused by this machine losing network.
+ * 401/403 do NOT count as expired (usually an old session cookie). Other errors (timeout, no network, 5xx) → 'unknown'.
+ */
+import * as dns from 'dns';
+import axios from 'axios';
+import FileStorageService from './FileStorageService';
+import { isZaloMediaUrl } from '../../utils/zalo/zaloImageUrl';
+
+export type MediaAvailability = 'ok' | 'expired' | 'unknown';
+
+const EXPIRED_STATUS = new Set([404, 410]);
+const DNS_HEALTH_TTL_MS = 30 * 1000;
+const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
+let dnsHealth: { at: number; ok: boolean } | null = null;
+
+export function isZaloMediaHost(url: string): boolean {
+    return isZaloMediaUrl(url);
+}
+
+async function zaloDnsHealthy(): Promise<boolean> {
+    if (dnsHealth && Date.now() - dnsHealth.at < DNS_HEALTH_TTL_MS) return dnsHealth.ok;
+    let ok = false;
+    try {
+        await dns.promises.lookup('chat.zalo.me');
+        ok = true;
+    } catch { /* network loss / broken DNS */ }
+    dnsHealth = { at: Date.now(), ok };
+    return ok;
+}
+
+/** Classify a media download error (an axios error or a Node network error). */
+export async function classifyMediaError(url: string, err: any): Promise<MediaAvailability> {
+    const status = Number(err?.response?.status || 0);
+    if (EXPIRED_STATUS.has(status)) return 'expired';
+    const code = String(err?.code || err?.cause?.code || '');
+    if (code === 'ENOTFOUND' && isZaloMediaHost(url) && await zaloDnsHealthy()) return 'expired';
+    return 'unknown';
+}
+
+/** Quick check of one media URL (GET 1 byte) using the account's cookie + User-Agent. */
+export async function probeMediaUrl(url: string, cookiesJson?: string, userAgent?: string): Promise<MediaAvailability> {
+    if (!/^https?:\/\//i.test(url)) return 'unknown';
+    const headers: Record<string, string> = {
+        'User-Agent': userAgent || DEFAULT_UA,
+        Referer: 'https://chat.zalo.me/',
+        Range: 'bytes=0-0',
+    };
+    const cookie = cookiesJson ? FileStorageService.buildCookieHeader(cookiesJson) : '';
+    if (cookie && isZaloMediaHost(url)) headers.Cookie = cookie;
+    try {
+        const res = await axios.get(url, {
+            headers,
+            responseType: 'stream',
+            timeout: 10000,
+            maxRedirects: 3,
+            validateStatus: () => true,
+        });
+        res.data?.destroy?.();
+        if (res.status >= 200 && res.status < 400) return 'ok';
+        return EXPIRED_STATUS.has(res.status) ? 'expired' : 'unknown';
+    } catch (err) {
+        return classifyMediaError(url, err);
+    }
+}

@@ -3,15 +3,45 @@ import { Link } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { Copy, ExternalLink } from "lucide-react"
+import { Copy, ExternalLink, Plus, RefreshCw, Trash2, Webhook } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import { Page } from "@/components/layout/AppShell"
 import { ErrorState, Field, PageHeader, Section, Spinner, useErrorMessage, useFieldError } from "@/components/common"
 import { useDevConfig } from "@/components/booking/BookingParts"
 import { api } from "@/lib/api"
-import { dateTime } from "@/lib/format"
+
+interface ChannelConnectionDto {
+  id: string
+  channel: string
+  accountId: string
+  accountName: string
+  isEnabled: boolean
+  createdAt: string
+}
+
+interface DeplaoStatus {
+  connected: boolean
+  platformManaged: boolean
+  configured: boolean
+  baseUrl: string
+  accountId: string | null
+  webhookId: string | null
+  hasApiKey: boolean
+  hasWebhookSecret: boolean
+  webhookUrl: string
+  connections: ChannelConnectionDto[]
+}
+
+interface DeplaoAccount {
+  id: string
+  channel: string
+  name: string
+  online: boolean
+  status: string | null
+}
 
 interface ZaloStatus {
   connected: boolean
@@ -22,7 +52,6 @@ interface ZaloStatus {
   hasOaSecretKey: boolean
   hasRefreshToken: boolean
   webhookUrl: string
-  tokenExpiresAt: string | null
 }
 
 export default function ChannelSettings() {
@@ -31,109 +60,254 @@ export default function ChannelSettings() {
   const dev = useDevConfig()
   const fieldError = useFieldError()
   const errorMessage = useErrorMessage()
-  const status = useQuery({ queryKey: ["zalo"], queryFn: () => api.get<ZaloStatus>("/api/app/channels/zalo") })
-  const [form, setForm] = useState({ appId: "", appSecret: "", oaId: "", oaSecretKey: "", accessToken: "", refreshToken: "" })
-  const [test, setTest] = useState({ userId: "", text: "" })
-  const s = status.data
 
-  const save = useMutation({
-    mutationFn: () => api.put<ZaloStatus>("/api/app/channels/zalo", Object.fromEntries(Object.entries({ ...form, appId: form.appId || s?.appId, oaId: form.oaId || s?.oaId }).map(([k, v]) => [k, v || null]))),
-    onSuccess: () => {
-      toast.success(t("channels.saved"))
-      setForm({ appId: "", appSecret: "", oaId: "", oaSecretKey: "", accessToken: "", refreshToken: "" })
-      void qc.invalidateQueries({ queryKey: ["zalo"] })
+  const deplao = useQuery({ queryKey: ["deplao"], queryFn: () => api.get<DeplaoStatus>("/api/app/channels/deplao") })
+  const zalo = useQuery({ queryKey: ["zalo"], queryFn: () => api.get<ZaloStatus>("/api/app/channels/zalo") })
+
+  const [dForm, setDForm] = useState({ baseUrl: "", apiKey: "", webhookSecret: "" })
+  const [dTest, setDTest] = useState({ conversationId: "", text: "" })
+  const [accounts, setAccounts] = useState<DeplaoAccount[]>([])
+  const [oaForm, setOaForm] = useState({ appId: "", appSecret: "", oaId: "", oaSecretKey: "", accessToken: "", refreshToken: "" })
+
+  const d = deplao.data
+  const s = zalo.data
+
+  const loadAccounts = useMutation({
+    mutationFn: () =>
+      api.post<{ ok: boolean; accounts: DeplaoAccount[]; error?: string }>("/api/app/channels/deplao/accounts", {
+        baseUrl: dForm.baseUrl || d?.baseUrl || null,
+        apiKey: dForm.apiKey || null,
+      }),
+    onSuccess: (r) => {
+      if (!r.ok) {
+        toast.error(r.error || t("channels.deplaoNoAccounts"))
+        return
+      }
+      setAccounts(r.accounts)
+      if (r.accounts.length === 0) toast.info(t("channels.deplaoNoAccounts"))
     },
+    onError: (e) => toast.error(errorMessage(e)),
   })
-  const disconnect = useMutation({ mutationFn: () => api.del("/api/app/channels/zalo"), onSuccess: () => void qc.invalidateQueries({ queryKey: ["zalo"] }) })
+
+  const addConnection = useMutation({
+    mutationFn: (acc: DeplaoAccount) =>
+      api.post<DeplaoStatus>("/api/app/channels/deplao/connections", {
+        channel: acc.channel,
+        accountId: acc.id,
+        accountName: acc.name,
+      }),
+    onSuccess: () => {
+      toast.success(t("channels.deplaoSaved"))
+      void qc.invalidateQueries({ queryKey: ["deplao"] })
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  const toggleConnection = useMutation({
+    mutationFn: ({ id, isEnabled }: { id: string; isEnabled: boolean }) =>
+      api.put(`/api/app/channels/deplao/connections/${id}`, { isEnabled }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["deplao"] }),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  const removeConnection = useMutation({
+    mutationFn: (id: string) => api.del(`/api/app/channels/deplao/connections/${id}`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["deplao"] }),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  const saveGateway = useMutation({
+    mutationFn: () =>
+      api.put("/api/app/channels/deplao", {
+        baseUrl: dForm.baseUrl || d?.baseUrl || null,
+        apiKey: dForm.apiKey || null,
+        webhookSecret: dForm.webhookSecret || null,
+      }),
+    onSuccess: () => {
+      toast.success(t("channels.deplaoSaved"))
+      setDForm({ baseUrl: "", apiKey: "", webhookSecret: "" })
+      void qc.invalidateQueries({ queryKey: ["deplao"] })
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  const registerWebhook = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; message: string }>("/api/app/channels/deplao/register-webhook"),
+    onSuccess: (r) => (r.ok ? toast.success(t("channels.deplaoWebhookRegistered")) : toast.error(r.message)),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
   const sendTest = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; message: string }>("/api/app/channels/zalo/test", test),
+    mutationFn: () => api.post<{ ok: boolean; message: string }>("/api/app/channels/deplao/test", dTest),
     onSuccess: (r) => (r.ok ? toast.success(t("channels.testSent")) : toast.error(r.message || t("channels.testFailed"))),
     onError: (e) => toast.error(errorMessage(e)),
   })
 
-  if (status.error) return <Page narrow><ErrorState error={status.error} onRetry={() => void status.refetch()} /></Page>
+  const saveOa = useMutation({
+    mutationFn: () =>
+      api.put("/api/app/channels/zalo", Object.fromEntries(Object.entries({ ...oaForm, appId: oaForm.appId || s?.appId, oaId: oaForm.oaId || s?.oaId }).map(([k, v]) => [k, v || null]))),
+    onSuccess: () => {
+      toast.success(t("channels.saved"))
+      setOaForm({ appId: "", appSecret: "", oaId: "", oaSecretKey: "", accessToken: "", refreshToken: "" })
+      void qc.invalidateQueries({ queryKey: ["zalo"] })
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  if (deplao.error) return <Page narrow><ErrorState error={deplao.error} onRetry={() => void deplao.refetch()} /></Page>
 
   return (
     <Page narrow>
-      <PageHeader title={t("channels.title")} description={t("channels.description")} />
-      {!s ? (
+      <PageHeader title={t("channels.title")} description="Kết nối Zalo, Facebook, Telegram qua Deplao T123 vào cùng AI Agent." />
+      {!d ? (
         <Skeleton className="h-72 w-full rounded-xl" />
       ) : (
         <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
           <div className="space-y-6">
             <Section
-              title="Zalo Official Account"
-              description={s.connected ? t("channels.connected", { oa: s.oaId ?? "" }) : t("channels.notConnected")}
-              actions={s.configured && <span className={s.connected ? "text-sm text-brand" : "text-sm text-muted-foreground"}>{s.connected ? t("channels.statusOn") : t("channels.statusPartial")}</span>}
+              title="Kênh đã kết nối (Zalo / Facebook / Telegram)"
+              description={d.connected ? "Các kết nối được lưu riêng theo từng homestay trong cơ sở dữ liệu." : "Cần cấu hình Gateway Deplao hoặc biến môi trường Deplao__ApiKey."}
+              actions={
+                <Button size="sm" variant="outline" onClick={() => loadAccounts.mutate()} disabled={loadAccounts.isPending}>
+                  {loadAccounts.isPending ? <Spinner /> : <RefreshCw className="size-3.5" />}
+                  <span className="ml-1.5">{t("channels.deplaoLoadAccounts")}</span>
+                </Button>
+              }
             >
               <div className="space-y-4">
-                <Field label={t("channels.webhookUrl")} hint={t("channels.webhookHint")}>
-                  <div className="flex gap-2">
-                    <Input readOnly value={s.webhookUrl} className="font-mono text-xs" />
-                    <Button variant="outline" size="icon" onClick={() => { void navigator.clipboard.writeText(s.webhookUrl); toast.success(t("common.copied")) }} aria-label={t("common.copy")}>
-                      <Copy />
-                    </Button>
+                {d.connections.length === 0 ? (
+                  <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+                    Chưa có kênh nào được gắn cho homestay này. Bấm &ldquo;{t("channels.deplaoLoadAccounts")}&rdquo; để chọn tài khoản từ Deplao.
+                  </p>
+                ) : (
+                  <ul className="divide-y rounded-lg border">
+                    {d.connections.map((c) => (
+                      <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">
+                            <span className="mr-2 rounded bg-muted px-1.5 py-0.5 text-xs">{c.channel}</span>
+                            {c.accountName}
+                          </p>
+                          <p className="truncate font-mono text-xs text-muted-foreground">{c.accountId}</p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <Switch
+                            checked={c.isEnabled}
+                            onCheckedChange={(checked) => toggleConnection.mutate({ id: c.id, isEnabled: checked })}
+                            aria-label={c.accountName}
+                          />
+                          <Button variant="ghost" size="icon-sm" onClick={() => removeConnection.mutate(c.id)} aria-label="Remove">
+                            <Trash2 className="size-4 text-muted-foreground" />
+                          </Button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {accounts.length > 0 && (
+                  <div className="space-y-2 rounded-lg bg-muted/40 p-3">
+                    <p className="text-xs font-medium text-muted-foreground">Tài khoản đang có trên Deplao T123:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {accounts.map((acc) => {
+                        const already = d.connections.some((c) => c.accountId === acc.id)
+                        return (
+                          <Button
+                            key={acc.id}
+                            size="sm"
+                            variant={already ? "secondary" : "outline"}
+                            disabled={already || addConnection.isPending}
+                            onClick={() => addConnection.mutate(acc)}
+                          >
+                            <Plus className="mr-1 size-3.5" />
+                            {acc.name} ({acc.channel}) {acc.online ? "●" : "○"}
+                          </Button>
+                        )
+                      })}
+                    </div>
                   </div>
-                </Field>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label={t("channels.appId")} error={fieldError(save.error, "appId")}>
-                    <Input value={form.appId} placeholder={s.appId ?? ""} onChange={(e) => setForm({ ...form, appId: e.target.value })} />
-                  </Field>
-                  <Field label={t("channels.oaId")} error={fieldError(save.error, "oaId")}>
-                    <Input value={form.oaId} placeholder={s.oaId ?? ""} onChange={(e) => setForm({ ...form, oaId: e.target.value })} />
-                  </Field>
-                  <Field label={t("channels.appSecret")} hint={s.hasAppSecret ? t("channels.storedHint") : undefined}>
-                    <Input type="password" value={form.appSecret} placeholder={s.hasAppSecret ? "••••••••" : ""} onChange={(e) => setForm({ ...form, appSecret: e.target.value })} />
-                  </Field>
-                  <Field label={t("channels.oaSecret")} hint={s.hasOaSecretKey ? t("channels.storedHint") : undefined} error={fieldError(save.error, "oaSecretKey")}>
-                    <Input type="password" value={form.oaSecretKey} placeholder={s.hasOaSecretKey ? "••••••••" : ""} onChange={(e) => setForm({ ...form, oaSecretKey: e.target.value })} />
-                  </Field>
-                  <Field label={t("channels.accessToken")} optional>
-                    <Input type="password" value={form.accessToken} onChange={(e) => setForm({ ...form, accessToken: e.target.value })} />
-                  </Field>
-                  <Field label={t("channels.refreshToken")} optional hint={s.hasRefreshToken ? t("channels.storedHint") : undefined}>
-                    <Input type="password" value={form.refreshToken} placeholder={s.hasRefreshToken ? "••••••••" : ""} onChange={(e) => setForm({ ...form, refreshToken: e.target.value })} />
-                  </Field>
-                </div>
-                {s.tokenExpiresAt && <p className="text-xs text-muted-foreground">{t("channels.tokenExpires", { when: dateTime(s.tokenExpiresAt) })}</p>}
-                {save.error && !fieldError(save.error, "appId") && !fieldError(save.error, "oaSecretKey") && <p className="text-sm text-destructive">{errorMessage(save.error)}</p>}
-                <div className="flex flex-wrap gap-2">
-                  <Button onClick={() => save.mutate()} disabled={save.isPending}>
-                    {save.isPending && <Spinner />} {s.configured ? t("channels.update") : t("channels.connect")}
-                  </Button>
-                  {s.configured && (
-                    <Button variant="ghost" onClick={() => disconnect.mutate()}>
-                      {t("channels.disconnect")}
-                    </Button>
-                  )}
-                </div>
+                )}
               </div>
             </Section>
 
-            {s.connected && (
-              <Section title={t("channels.testTitle")} description={t("channels.testDescription")}>
+            {d.connected && (
+              <Section title={t("channels.testTitle")} description="Gửi tin nhắn thử tới một user/thread ID qua Deplao T123.">
                 <div className="grid gap-4 sm:grid-cols-[200px_1fr_auto] sm:items-end">
-                  <Field label={t("channels.zaloUserId")}>
-                    <Input value={test.userId} onChange={(e) => setTest({ ...test, userId: e.target.value })} />
+                  <Field label="User / Thread ID">
+                    <Input value={dTest.conversationId} onChange={(e) => setDTest({ ...dTest, conversationId: e.target.value })} />
                   </Field>
                   <Field label={t("channels.message")} optional>
-                    <Input value={test.text} onChange={(e) => setTest({ ...test, text: e.target.value })} />
+                    <Input value={dTest.text} onChange={(e) => setDTest({ ...dTest, text: e.target.value })} />
                   </Field>
-                  <Button variant="outline" onClick={() => sendTest.mutate()} disabled={!test.userId || sendTest.isPending}>
+                  <Button variant="outline" onClick={() => sendTest.mutate()} disabled={!dTest.conversationId || sendTest.isPending}>
                     {sendTest.isPending && <Spinner />} {t("channels.sendTest")}
                   </Button>
                 </div>
               </Section>
             )}
+
+            <details className="rounded-xl border p-5">
+              <summary className="cursor-pointer text-sm font-medium">
+                Cấu hình nâng cao (Gateway riêng, Webhook &amp; Zalo OA)
+              </summary>
+              <div className="mt-4 space-y-6">
+                <div className="space-y-4">
+                  <Field label={t("channels.webhookUrl")}>
+                    <div className="flex gap-2">
+                      <Input readOnly value={d.webhookUrl} className="font-mono text-xs" />
+                      <Button variant="outline" size="icon" onClick={() => { void navigator.clipboard.writeText(d.webhookUrl); toast.success(t("common.copied")) }} aria-label={t("common.copy")}>
+                        <Copy />
+                      </Button>
+                    </div>
+                  </Field>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <Field label={t("channels.deplaoBaseUrl")} error={fieldError(saveGateway.error, "baseUrl")}>
+                      <Input value={dForm.baseUrl} placeholder={d.baseUrl} onChange={(e) => setDForm({ ...dForm, baseUrl: e.target.value })} />
+                    </Field>
+                    <Field label={t("channels.deplaoApiKey")} hint={d.hasApiKey ? t("channels.storedHint") : d.platformManaged ? "Đang dùng key hệ thống" : undefined}>
+                      <Input type="password" value={dForm.apiKey} placeholder={d.hasApiKey ? "••••••••" : "dpk_..."} onChange={(e) => setDForm({ ...dForm, apiKey: e.target.value })} />
+                    </Field>
+                    <Field label={t("channels.deplaoWebhookSecret")} optional>
+                      <Input type="password" value={dForm.webhookSecret} placeholder={d.hasWebhookSecret ? "••••••••" : "whsec_..."} onChange={(e) => setDForm({ ...dForm, webhookSecret: e.target.value })} />
+                    </Field>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => saveGateway.mutate()} disabled={saveGateway.isPending}>
+                      {saveGateway.isPending && <Spinner />} {t("channels.update")}
+                    </Button>
+                    {d.connected && (
+                      <Button size="sm" variant="outline" onClick={() => registerWebhook.mutate()} disabled={registerWebhook.isPending}>
+                        {registerWebhook.isPending ? <Spinner /> : <Webhook className="mr-1 size-4" />} {t("channels.deplaoRegisterWebhook")}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {s && (
+                  <div className="space-y-4 border-t pt-4">
+                    <p className="text-sm font-medium">Zalo Official Account (tuỳ chọn)</p>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label={t("channels.appId")}><Input value={oaForm.appId} placeholder={s.appId ?? ""} onChange={(e) => setOaForm({ ...oaForm, appId: e.target.value })} /></Field>
+                      <Field label={t("channels.oaId")}><Input value={oaForm.oaId} placeholder={s.oaId ?? ""} onChange={(e) => setOaForm({ ...oaForm, oaId: e.target.value })} /></Field>
+                      <Field label={t("channels.oaSecret")}><Input type="password" value={oaForm.oaSecretKey} placeholder={s.hasOaSecretKey ? "••••••••" : ""} onChange={(e) => setOaForm({ ...oaForm, oaSecretKey: e.target.value })} /></Field>
+                      <Field label={t("channels.accessToken")}><Input type="password" value={oaForm.accessToken} onChange={(e) => setOaForm({ ...oaForm, accessToken: e.target.value })} /></Field>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => saveOa.mutate()} disabled={saveOa.isPending}>
+                      {saveOa.isPending && <Spinner />} Lưu Zalo OA
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </details>
           </div>
+
           <aside className="space-y-4 lg:sticky lg:top-8 lg:h-fit">
             <div className="rounded-xl border p-5 text-sm">
-              <p className="font-medium">{t("channels.stepsTitle")}</p>
+              <p className="font-medium">Kết nối nhanh với Deplao T123</p>
               <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-muted-foreground">
-                <li>{t("channels.step1")}</li>
-                <li>{t("channels.step2")}</li>
-                <li>{t("channels.step3")}</li>
-                <li>{t("channels.step4")}</li>
+                <li>Đăng nhập Zalo, Facebook hoặc Telegram trong Deplao T123.</li>
+                <li>Bấm &ldquo;{t("channels.deplaoLoadAccounts")}&rdquo; để chọn tài khoản cho homestay.</li>
+                <li>Mọi tin nhắn từ các kênh đều đi vào cùng AI Agent &amp; Hộp thư.</li>
               </ol>
             </div>
             {dev.data?.devTools && (

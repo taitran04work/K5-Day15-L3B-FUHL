@@ -1,0 +1,2189 @@
+/**
+ * TelegramBotChannelService.ts - Telegram Bot chat channel
+ *
+ * Handles inbox messages: save to DB, download media, broadcast UI events.
+ * Also exposes all Bot API send/action methods.
+ *
+ * Polling is owned by TelegramBotIngressService (TG-015).
+ * This service registers as an inbox consumer of the ingress.
+ */
+
+import axios from 'axios';
+import { EventEmitter } from 'events';
+import * as path from 'path';
+import * as fs from 'fs';
+import Logger from '../../../utils/Logger';
+import DatabaseService from '../../database/DatabaseService';
+import EventBroadcaster from '../../event/EventBroadcaster';
+import FileStorageService from '../../file/FileStorageService';
+import { writeMediaFile } from '../../file/writeMediaFile';
+import { shouldFetchAvatar, markAvatarFetched, markAvatarSuccess, resetAvatarCache } from '../../../utils/telegram/avatarFetchCache';
+import * as BotIngress from './TelegramBotIngressService';
+import type { BotAccount, NormalizedUpdate, BotUpdateConsumer } from './TelegramBotIngressService';
+import { getTelegramMessagePreview } from '../messages/TelegramMessagePreview';
+import { isTelegramBotToken } from '../../../shared/accounts/storedCredential';
+import { telegramSentTimestamp } from '../../../utils/time/serverClock';
+import { tr } from '../../../shared/i18n';
+
+const TELEGRAM_API = 'https://api.telegram.org';
+const REQUEST_TIMEOUT = 30000;
+
+/** Renderer may pass Electron's local-media:// URL. The Bot API needs a real file path. */
+function resolveBotUploadPath(filePath: string): string {
+  let candidate = filePath;
+  if (candidate.startsWith('local-media:///')) candidate = candidate.replace('local-media:///', '');
+  else if (candidate.startsWith('local-media://')) candidate = candidate.replace('local-media://', '');
+  // DB local_paths may be relative to the configured storage folder.
+  return FileStorageService.resolveAbsolutePath(candidate);
+}
+
+function appendBotUpload(form: any, field: string, filePath: string): void {
+  if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+    form.append(field, filePath);
+    return;
+  }
+  const resolvedPath = resolveBotUploadPath(filePath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(tr('File không tồn tại: {{v1}}', { v1: path.basename(resolvedPath) }));
+  }
+  form.append(field, fs.createReadStream(resolvedPath));
+}
+
+// Re-export BotAccount from ingress for backward compatibility
+export type TelegramBotAccount = BotAccount;
+
+/** Map accountId → registered account (for send methods) */
+const registeredAccounts = new Map<string, BotAccount>();
+
+const events = new EventEmitter();
+
+// ─── Event types ─────────────────────────────────────────────────────────────
+
+export interface TelegramMessage {
+  accountId: string;
+  threadId: string;      // = chat_id
+  threadType: number;    // 0=user, 1=group
+  senderId: string;
+  senderName: string;
+  messageId: string;
+  content: string;
+  msgType: string;       // 'text', 'photo', 'video', 'document', 'sticker', 'audio', 'voice'
+  timestamp: number;
+  isSelf: boolean;
+  attachments?: any[];
+  replyToMessageId?: string;
+}
+
+function normalizeBotPollAttachment(poll: any): any {
+  return {
+    type: 'poll',
+    id: String(poll?.id || ''),
+    poll_id: String(poll?.id || ''),
+    question: String(poll?.question || tr('Bình chọn')),
+    closed: !!poll?.is_closed,
+    is_closed: !!poll?.is_closed,
+    multiple_choice: !!poll?.allows_multiple_answers,
+    allows_multiple_answers: !!poll?.allows_multiple_answers,
+    quiz: !!poll?.type && poll.type === 'quiz',
+    open_answers: !!poll?.allows_add_options,
+    allows_add_options: !!poll?.allows_add_options,
+    is_anonymous: !!poll?.is_anonymous,
+    total_voters: Number(poll?.total_voter_count || 0),
+    total_voter_count: Number(poll?.total_voter_count || 0),
+    options: (poll?.options || []).map((option: any) => ({
+      text: String(typeof option === 'string' ? option : option?.text || ''),
+      voters: Number(option?.voter_count || 0),
+      voter_count: Number(option?.voter_count || 0),
+      persistent_id: String(option?.persistent_id || ''),
+    })),
+  };
+}
+
+/** Preserve Bot API mention entities for text and captions. */
+function getBotMentionAttachments(text: string, entities: any): any[] {
+  if (!Array.isArray(entities)) return [];
+  return entities
+    .filter((entity: any) => entity?.type === 'mention' || entity?.type === 'text_mention')
+    .map((entity: any) => {
+      const offset = Math.max(0, Number(entity?.offset || 0));
+      const length = Math.max(0, Number(entity?.length || 0));
+      const userId = entity?.user?.id ?? entity?.user_id ?? '';
+      const username = entity?.type === 'mention'
+        ? String(text || '').slice(offset, offset + length).replace(/^@/, '')
+        : '';
+      return {
+        type: 'telegram_mention',
+        offset,
+        length,
+        user_id: userId === undefined || userId === null ? '' : String(userId),
+        username,
+      };
+    })
+    .filter((mention: any) => mention.length > 0 && mention.offset + mention.length <= String(text || '').length);
+}
+
+// ─── Ingress consumer (inbox handler) ───────────────────────────────────────
+
+/**
+ * Handle an inbound message from the ingress service.
+ * Called by TelegramBotIngressService for each 'message' update.
+ */
+async function handleInboundMessage(account: BotAccount, message: any): Promise<void> {
+  if (!message) { Logger.warn('[TelegramBot] handleInboundMessage: null message'); return; }
+
+  const chatId = String(message.chat?.id || '');
+  const fromId = String(message.from?.id || '');
+  const fromName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') || fromId;
+  const isGroup = message.chat?.type === 'group' || message.chat?.type === 'supergroup';
+  const isChannel = message.chat?.type === 'channel';
+  const threadType = isGroup ? 1 : 0;
+  const timestamp = (message.date || Math.floor(Date.now() / 1000)) * 1000;
+  const messageId = String(message.message_id || Date.now());
+
+  Logger.log(`[TelegramBot] handleInboundMessage: chatId=${chatId} from=${fromName} msgId=${messageId} hasText=${!!message.text} hasPhoto=${!!message.photo} hasVideo=${!!message.video} hasDocument=${!!message.document} hasSticker=${!!message.sticker}`);
+
+  // Determine message type + content
+  let content = '';
+  let msgType = 'text';
+  let attachments: any[] = [];
+
+  if (message.text) {
+    content = message.text;
+    msgType = 'text';
+  } else if (message.photo) {
+    msgType = 'photo';
+    content = message.caption || '';
+    attachments = message.photo.map((p: any) => ({
+      type: 'photo',
+      file_id: p.file_id,
+      file_unique_id: p.file_unique_id,
+      width: p.width,
+      height: p.height,
+      file_size: p.file_size,
+    }));
+  } else if (message.video) {
+    msgType = 'video';
+    content = message.caption || '';
+    attachments = [{
+      type: 'video',
+      file_id: message.video.file_id,
+      file_unique_id: message.video.file_unique_id,
+      width: message.video.width,
+      height: message.video.height,
+      duration: message.video.duration,
+      file_size: message.video.file_size,
+    }];
+  } else if (message.animation) {
+    // GIF/Animation
+    msgType = 'gif';
+    content = message.caption || '';
+    attachments = [{
+      type: 'gif',
+      file_id: message.animation.file_id,
+      file_unique_id: message.animation.file_unique_id,
+      width: message.animation.width,
+      height: message.animation.height,
+      duration: message.animation.duration,
+      file_size: message.animation.file_size,
+      mime_type: message.animation.mime_type || '',
+    }];
+  } else if (message.document) {
+    msgType = 'file';
+    content = message.caption || '';
+    attachments = [{
+      type: 'file',
+      file_id: message.document.file_id,
+      file_unique_id: message.document.file_unique_id,
+      file_name: message.document.file_name,
+      mime_type: message.document.mime_type,
+      file_size: message.document.file_size,
+    }];
+  } else if (message.sticker) {
+    const isAnimated = message.sticker.is_animated === true;
+    const isVideo = message.sticker.is_video === true;
+    msgType = 'sticker';
+    attachments = [{
+      type: 'sticker',
+      is_sticker: true,
+      sticker_format: isAnimated ? 'tgs' : isVideo ? 'webm' : 'webp',
+      mime_type: isAnimated ? 'application/x-tgsticker' : isVideo ? 'video/webm' : 'image/webp',
+      file_id: message.sticker.file_id,
+      file_unique_id: message.sticker.file_unique_id,
+      emoji: message.sticker.emoji,
+      width: message.sticker.width,
+      height: message.sticker.height,
+    }];
+  } else if (message.video_note) {
+    // Round video message
+    msgType = 'video_note';
+    attachments = [{
+      type: 'video_note',
+      file_id: message.video_note.file_id,
+      file_unique_id: message.video_note.file_unique_id,
+      length: message.video_note.length,
+      duration: message.video_note.duration,
+      file_size: message.video_note.file_size,
+    }];
+  } else if (message.audio) {
+    msgType = 'audio';
+    attachments = [{
+      type: 'audio',
+      file_id: message.audio.file_id,
+      duration: message.audio.duration,
+      title: message.audio.title,
+      file_size: message.audio.file_size,
+    }];
+  } else if (message.voice) {
+    msgType = 'voice';
+    attachments = [{
+      type: 'voice',
+      file_id: message.voice.file_id,
+      duration: message.voice.duration,
+      file_size: message.voice.file_size,
+    }];
+  } else if (message.contact) {
+    msgType = 'contact';
+    content = message.contact.phone_number || '';
+    attachments = [{
+      type: 'contact',
+      phone_number: message.contact.phone_number,
+      first_name: message.contact.first_name,
+      last_name: message.contact.last_name || '',
+      user_id: message.contact.user_id || '',
+    }];
+  } else if (message.location) {
+    msgType = 'location';
+    content = message.location.title || `${message.location.latitude}, ${message.location.longitude}`;
+    attachments = [{
+      type: 'location',
+      latitude: message.location.latitude,
+      longitude: message.location.longitude,
+    }];
+  } else if (message.venue) {
+    msgType = 'venue';
+    content = message.venue.title || '';
+    attachments = [{
+      type: 'venue',
+      title: message.venue.title,
+      address: message.venue.address || '',
+      latitude: message.venue.location?.latitude,
+      longitude: message.venue.location?.longitude,
+    }];
+  } else if (message.poll) {
+    msgType = 'telegram.poll';
+    content = message.poll.question || '';
+    attachments = [normalizeBotPollAttachment(message.poll)];
+  }
+
+  // Bot API puts entities for captions in caption_entities, not entities.
+  const entities = message.text ? message.entities : message.caption_entities;
+  attachments.push(...getBotMentionAttachments(content, entities));
+
+  // Reply-to
+  let replyToMessageId: string | undefined;
+  if (message.reply_to_message?.message_id) {
+    replyToMessageId = String(message.reply_to_message.message_id);
+  }
+
+  const tgMsg: TelegramMessage = {
+    accountId: account.accountId,
+    threadId: chatId,
+    threadType,
+    senderId: fromId,
+    senderName: fromName,
+    messageId,
+    content,
+    msgType,
+    timestamp,
+    isSelf: false, // Bot never sends via polling
+    attachments,
+    replyToMessageId,
+  };
+
+  // Save to DB
+  await saveMessage(tgMsg, account.botToken);
+
+  // Download media (background, non-blocking)
+  // For photos, use the largest size (last element in array)
+  const downloadAtt = msgType === 'photo' ? attachments[attachments.length - 1] : attachments[0];
+  if (downloadAtt?.file_id) {
+    const fileId = downloadAtt.file_id;
+    const fileName = downloadAtt.file_name || `${msgType}_${messageId}`;
+    downloadBotMedia(account.botToken, fileId, fileName, msgType, account.accountId, messageId, chatId).catch(err => {
+      Logger.warn(`[TelegramBotChannel] Media download failed: ${err.message}`);
+    });
+  }
+
+  // Broadcast event to UI
+  EventBroadcaster.emit('event:message', {
+    zaloId: account.accountId,
+    channel: 'telegram_bot',
+    message: {
+      channel: 'telegram_bot',
+      type: threadType,
+      threadId: chatId,
+      isSelf: false,
+      data: {
+        uidFrom: fromId,
+        idTo: chatId,
+        msgId: messageId,
+        content,
+        preview: getTelegramMessagePreview(msgType, content),
+        msgType,
+        channel: 'telegram_bot',
+        isChannel,
+        chatType: String(message.chat?.type || ''),
+        ts: String(timestamp),
+        dName: fromName,
+        attachments,
+      },
+    },
+  });
+
+  Logger.log(`[TelegramBotChannel] ${account.accountId}: msg from ${fromName} in ${chatId}: ${content.slice(0, 50)}`);
+}
+
+// ─── Database ────────────────────────────────────────────────────────────────
+
+async function saveMessage(msg: TelegramMessage, botToken?: string): Promise<void> {
+  const db = DatabaseService.getInstance();
+  if (!db) return;
+
+  try {
+    // Save to unified messages table
+    const displayContent = msg.content || (() => {
+      if (msg.msgType === 'photo') return '🖼️ Hình ảnh';
+      if (msg.msgType === 'video') return '🎬 Video';
+      if (msg.msgType === 'audio') return '🎵 Audio';
+      if (msg.msgType === 'voice') return '🎤 Voice';
+      if (msg.msgType === 'sticker') return '🎨 Sticker';
+      if (msg.msgType !== 'text') return '📎 Tệp đính kèm';
+      return '';
+    })();
+
+    // Resolve quote_data if this is a reply
+    let quoteData: string | undefined;
+    if (msg.replyToMessageId) {
+      try {
+        const orig = db.queryOne<any>(
+          `SELECT content, msg_type, sender_id FROM messages WHERE msg_id = ? AND owner_zalo_id = ?`,
+          [msg.replyToMessageId, msg.accountId]
+        );
+        if (orig) {
+          quoteData = JSON.stringify({
+            msgId: msg.replyToMessageId,
+            msg: orig.content || '',
+            senderId: orig.sender_id || '',
+            msgType: orig.msg_type || 'text',
+          });
+        }
+      } catch {}
+    }
+
+    db.run(`
+      INSERT OR IGNORE INTO messages
+        (msg_id, owner_zalo_id, thread_id, thread_type, sender_id, content, msg_type, timestamp, is_sent, attachments, status, channel, reply_to_id, quote_data)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'telegram_bot', ?, ?)
+    `, [
+      msg.messageId,
+      msg.accountId,
+      msg.threadId,
+      msg.threadType,
+      msg.senderId,
+      displayContent,
+      msg.msgType,
+      msg.timestamp,
+      msg.isSelf ? 1 : 0,
+      JSON.stringify(msg.attachments || []),
+      msg.isSelf ? 'sent' : 'received',
+      msg.replyToMessageId || null,
+      quoteData || null,
+    ]);
+
+    // Store the original caption in messages; use a stable media label for the
+    // conversation row so a phone number caption cannot masquerade as text.
+    const preview = getTelegramMessagePreview(msg.msgType, msg.content);
+
+    // Update contacts
+    db.run(`
+      INSERT INTO contacts (owner_zalo_id, contact_id, display_name, avatar_url, is_friend, contact_type, unread_count, last_message, last_message_time, channel)
+      VALUES (?, ?, ?, '', 0, ?, ?, ?, ?, 'telegram_bot')
+      ON CONFLICT(owner_zalo_id, contact_id) DO UPDATE SET
+        display_name = CASE WHEN excluded.display_name != '' AND contacts.display_name = '' THEN excluded.display_name ELSE contacts.display_name END,
+        last_message = excluded.last_message,
+        last_message_time = excluded.last_message_time,
+        unread_count = CASE WHEN ? = 0 THEN contacts.unread_count + 1 ELSE contacts.unread_count END,
+        channel = 'telegram_bot'
+    `, [
+      msg.accountId, msg.threadId, msg.senderName,
+      msg.threadType === 1 ? 'group' : 'user',
+      msg.isSelf ? 0 : 1, preview, msg.timestamp,
+      msg.isSelf ? 0 : 1, // for the ON CONFLICT update
+    ]);
+
+    // Fetch avatar for a new contact (background)
+    if (!msg.isSelf) {
+      fetchBotContactAvatar(msg.accountId, msg.threadId, msg.senderName, botToken).catch(() => {});
+    }
+  } catch (err: any) {
+    Logger.error(`[TelegramBotChannel] saveMessage error: ${err.message}`);
+  }
+}
+
+/** Edited poll updates carry the full current Poll object. Persist it against
+ * the original message so existing bubbles refresh instead of adding a second
+ * poll message. */
+async function updateBotPollMessage(account: BotAccount, rawMessage: any): Promise<void> {
+  const poll = rawMessage?.poll;
+  const chatId = String(rawMessage?.chat?.id || '');
+  const messageId = String(rawMessage?.message_id || '');
+  if (!poll || !chatId || !messageId) return;
+
+  const attachments = [normalizeBotPollAttachment(poll)];
+  const content = String(poll.question || tr('Bình chọn'));
+  const timestamp = Number(rawMessage?.edit_date || rawMessage?.date || Math.floor(Date.now() / 1000)) * 1000;
+  DatabaseService.getInstance()?.run(
+    `UPDATE messages SET content = ?, msg_type = 'telegram.poll', attachments = ?, is_edited = 1
+     WHERE msg_id = ? AND owner_zalo_id = ? AND thread_id = ? AND channel = 'telegram_bot'`,
+    [content, JSON.stringify(attachments), messageId, account.accountId, chatId],
+  );
+
+  EventBroadcaster.emit('event:message', {
+    zaloId: account.accountId,
+    channel: 'telegram_bot',
+    message: {
+      channel: 'telegram_bot', type: String(rawMessage?.chat?.type || '') === 'private' ? 0 : 1,
+      threadId: chatId, isSelf: String(rawMessage?.from?.id || '') === account.accountId,
+      data: {
+        uidFrom: String(rawMessage?.from?.id || ''), idTo: chatId, msgId: messageId,
+        content, preview: getTelegramMessagePreview('telegram.poll', content),
+        msgType: 'telegram.poll', channel: 'telegram_bot', ts: String(timestamp),
+        dName: [rawMessage?.from?.first_name, rawMessage?.from?.last_name].filter(Boolean).join(' '), attachments,
+      },
+    },
+  });
+}
+
+/** Bot API delivers vote changes as a standalone `poll` update, without the
+ * enclosing chat message. Match it to the poll rows we saved and refresh each
+ * matching bubble from the authoritative option counts. */
+async function updateBotPollResults(account: BotAccount, poll: any): Promise<void> {
+  const pollId = String(poll?.id || '');
+  if (!pollId) return;
+  const db = DatabaseService.getInstance();
+  if (!db) return;
+
+  const candidates = db.query<any>(
+    `SELECT msg_id, thread_id, thread_type, sender_id, is_sent, attachments
+     FROM messages
+     WHERE owner_zalo_id = ? AND channel = 'telegram_bot' AND msg_type = 'telegram.poll'
+       AND attachments LIKE ?`,
+    [account.accountId, `%'id":"${pollId}"%`],
+  );
+
+  const attachments = [normalizeBotPollAttachment(poll)];
+  for (const candidate of candidates) {
+    let existingPollId = '';
+    try {
+      const stored = JSON.parse(candidate.attachments || '[]');
+      existingPollId = String(stored.find((item: any) => item?.type === 'poll')?.id || '');
+    } catch {}
+    if (existingPollId !== pollId) continue;
+
+    db.run(
+      `UPDATE messages SET attachments = ? WHERE msg_id = ? AND owner_zalo_id = ? AND thread_id = ? AND channel = 'telegram_bot'`,
+      [JSON.stringify(attachments), candidate.msg_id, account.accountId, candidate.thread_id],
+    );
+    EventBroadcaster.emit('event:message', {
+      zaloId: account.accountId,
+      channel: 'telegram_bot',
+      message: {
+        channel: 'telegram_bot', type: Number(candidate.thread_type || 0), threadId: candidate.thread_id,
+        isSelf: Number(candidate.is_sent || 0) === 1,
+        _silentNotification: true,
+        data: {
+          uidFrom: String(candidate.sender_id || ''), idTo: candidate.thread_id, msgId: candidate.msg_id,
+          content: String(poll.question || tr('Bình chọn')), preview: getTelegramMessagePreview('telegram.poll'),
+          msgType: 'telegram.poll', channel: 'telegram_bot', ts: String(Date.now()), attachments,
+        },
+      },
+    });
+  }
+}
+
+async function handleBotPollOptionAdded(account: BotAccount, rawMessage: any): Promise<void> {
+  const added = rawMessage?.poll_option_added;
+  if (!added) return;
+  const pollMessage = added?.poll_message;
+  if (pollMessage?.poll) await updateBotPollMessage(account, pollMessage);
+
+  const optionId = String(added?.option_persistent_id || '');
+  const option = (pollMessage?.poll?.options || []).find((item: any) => String(item?.persistent_id || '') === optionId);
+  const fromName = [rawMessage?.from?.first_name, rawMessage?.from?.last_name].filter(Boolean).join(' ')
+    || String(rawMessage?.from?.username || rawMessage?.from?.id || tr('Thành viên'));
+  const optionText = String(option?.text || tr('một lựa chọn mới'));
+
+  await handleInboundMessage(account, {
+    ...rawMessage,
+    text: tr('{{fromName}} đã thêm “{{optionText}}” vào bình chọn', { fromName, optionText }),
+    poll_option_added: undefined,
+  });
+}
+
+// ─── Contact Avatar (Bot API) ────────────────────────────────────────────────
+
+/**
+ * Fetch avatar cho contact qua Bot API (getUserProfilePhotos)
+ */
+async function fetchBotContactAvatar(
+  accountId: string,
+  chatId: string,
+  senderName: string,
+  botToken: string,
+): Promise<void> {
+  const db = DatabaseService.getInstance();
+  if (!db) return;
+
+  try {
+    // Check whether it already has an avatar
+    const existing = db.queryOne<any>(
+      `SELECT avatar_url FROM contacts WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'telegram_bot'`,
+      [accountId, chatId]
+    );
+    if (existing?.avatar_url) {
+      markAvatarSuccess(accountId, chatId);
+      return;
+    }
+
+    // Check cache
+    if (!shouldFetchAvatar(accountId, chatId)) return;
+    markAvatarFetched(accountId, chatId);
+
+    // Bot API: getUserProfilePhotos
+    try {
+      const res = await axios.get(`${TELEGRAM_API}/bot${botToken}/getUserProfilePhotos`, {
+        params: { user_id: chatId, limit: 1 },
+        timeout: REQUEST_TIMEOUT,
+      });
+
+      if (res.data?.ok && res.data?.result?.photos?.length > 0) {
+        const photo = res.data.result.photos[0];
+        const fileId = photo[photo.length - 1]?.file_id; // Get the largest size
+        if (fileId) {
+          // Get file path
+          const fileRes = await axios.get(`${TELEGRAM_API}/bot${botToken}/getFile`, {
+            params: { file_id: fileId },
+            timeout: REQUEST_TIMEOUT,
+          });
+          if (fileRes.data?.ok && fileRes.data?.result?.file_path) {
+            const filePath = fileRes.data.result.file_path;
+            const downloadUrl = `${TELEGRAM_API}/file/bot${botToken}/${filePath}`;
+            const response = await axios.get(downloadUrl, { responseType: 'arraybuffer', timeout: 30000 });
+            const buffer = Buffer.from(response.data);
+            if (buffer.length > 0) {
+              const filename = `telegram_bot_avatar_${chatId}_${Date.now()}.jpg`;
+              const localPath = await saveAvatarToDisk(buffer, filename);
+              if (localPath) {
+                const normalized = localPath.replace(/\\/g, '/');
+                const mediaUrl = 'local-media://' + (normalized.startsWith('/') ? normalized : '/' + normalized);
+                db.run(`UPDATE contacts SET avatar_url = ? WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'telegram_bot'`,
+                  [mediaUrl, accountId, chatId]);
+                EventBroadcaster.emit('db:unreadChanged', { zaloId: accountId, source: 'bot_avatar_user' });
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+
+    // Also try to get chat photo for groups
+    try {
+      const chatRes = await axios.get(`${TELEGRAM_API}/bot${botToken}/getChat`, {
+        params: { chat_id: chatId },
+        timeout: REQUEST_TIMEOUT,
+      });
+      if (chatRes.data?.ok && chatRes.data?.result?.photo) {
+        const photoId = chatRes.data.result.photo.small_file_id;
+        const fileRes = await axios.get(`${TELEGRAM_API}/bot${botToken}/getFile`, {
+          params: { file_id: photoId },
+          timeout: REQUEST_TIMEOUT,
+        });
+        if (fileRes.data?.ok && fileRes.data?.result?.file_path) {
+          const downloadUrl = `${TELEGRAM_API}/file/bot${botToken}/${fileRes.data.result.file_path}`;
+          const response = await axios.get(downloadUrl, { responseType: 'arraybuffer', timeout: 30000 });
+          const buffer = Buffer.from(response.data);
+          if (buffer.length > 0) {
+            const filename = `telegram_bot_avatar_${chatId}_${Date.now()}.jpg`;
+            const localPath = await saveAvatarToDisk(buffer, filename);
+            if (localPath) {
+              const normalized = localPath.replace(/\\/g, '/');
+              const mediaUrl = 'local-media://' + (normalized.startsWith('/') ? normalized : '/' + normalized);
+              db.run(`UPDATE contacts SET avatar_url = ? WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'telegram_bot'`,
+                [mediaUrl, accountId, chatId]);
+                EventBroadcaster.emit('db:unreadChanged', { zaloId: accountId, source: 'bot_avatar_group' });
+            }
+          }
+        }
+      }
+    } catch {}
+  } catch {}
+}
+
+// ─── Media Download (Bot API) ────────────────────────────────────────────────
+
+/**
+ * Download media from the Telegram Bot API via getFile.
+ * Bot API: getFile(file_id) → file_path → download URL
+ */
+async function downloadBotMedia(
+  botToken: string,
+  fileId: string,
+  filename: string,
+  msgType: string,
+  accountId: string,
+  messageId: string,
+  threadId: string,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await downloadBotMediaOnce(botToken, fileId, filename, msgType, accountId, messageId, threadId);
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (attempt < 3) {
+        Logger.warn(`[TelegramBotChannel] Media download retry ${attempt}/3 msg=${messageId}: ${error?.message || String(error)}`);
+        await new Promise(resolve => setTimeout(resolve, 1_000 * attempt));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Media download failed'));
+}
+
+async function downloadBotMediaOnce(
+  botToken: string,
+  fileId: string,
+  filename: string,
+  msgType: string,
+  accountId: string,
+  messageId: string,
+  threadId: string,
+): Promise<void> {
+  const db = DatabaseService.getInstance();
+  if (!db) throw new Error('Database unavailable');
+
+  try {
+    // Step 1: Get file path from Telegram
+    const fileRes = await axios.get(`${TELEGRAM_API}/bot${botToken}/getFile`, {
+      params: { file_id: fileId },
+      timeout: REQUEST_TIMEOUT,
+    });
+
+    if (!fileRes.data?.ok || !fileRes.data?.result?.file_path) {
+      throw new Error(`getFile failed for ${fileId}`);
+    }
+
+    const filePath = fileRes.data.result.file_path;
+
+    // Step 2: Download file
+    const downloadUrl = `${TELEGRAM_API}/file/bot${botToken}/${filePath}`;
+    const response = await axios.get(downloadUrl, {
+      responseType: 'arraybuffer',
+      timeout: 60000,
+    });
+
+    const buffer = Buffer.from(response.data);
+    if (buffer.length === 0) throw new Error('Downloaded Telegram media is empty');
+
+    // Step 3: Save to disk
+    const ext = getMediaExtension(msgType, filePath || filename);
+    const safeFilename = `${accountId}_${threadId}_${messageId}${ext}`;
+    const localPath = await saveMediaToDisk(buffer, safeFilename, msgType);
+    if (!localPath) throw new Error('Could not save Telegram media');
+
+    // Step 4: Update local_paths trong DB
+    const localPaths: Record<string, string> = {};
+    if (msgType === 'photo') localPaths.main = localPath;
+    else if (msgType === 'video') localPaths.video = localPath;
+    else if (msgType === 'audio' || msgType === 'voice') localPaths.voice = localPath;
+    else localPaths.file = localPath;
+
+    db.run(
+      `UPDATE messages SET local_paths = ? WHERE msg_id = ? AND owner_zalo_id = ? AND thread_id = ? AND channel = 'telegram_bot'`,
+      [JSON.stringify(localPaths), messageId, accountId, threadId]
+    );
+
+    // Broadcast local path update to UI
+    EventBroadcaster.emit('event:localPath', {
+      zaloId: accountId,
+      msgId: messageId,
+      threadId,
+      localPaths,
+    });
+
+    Logger.log(`[TelegramBotChannel] Downloaded ${msgType} for msg ${messageId}: ${localPath}`);
+  } catch (err: any) {
+    Logger.warn(`[TelegramBotChannel] downloadBotMedia error: ${err.message}`);
+    throw err;
+  }
+}
+
+function getMediaExtension(msgType: string, filename: string): string {
+  if (msgType === 'photo') return '.jpg';
+  if (msgType === 'video') return '.mp4';
+  if (msgType === 'audio' || msgType === 'voice') return '.ogg';
+  if (msgType === 'sticker') {
+    const lowerName = filename.toLowerCase();
+    if (lowerName.endsWith('.tgs')) return '.tgs';
+    if (lowerName.endsWith('.webm')) return '.webm';
+    if (lowerName.endsWith('.mp4')) return '.mp4';
+    return '.webp';
+  }
+  // File: get from filename
+  const dot = filename.lastIndexOf('.');
+  if (dot > 0) return filename.substring(dot);
+  return '.bin';
+}
+
+async function saveAvatarToDisk(buffer: Buffer, filename: string): Promise<string | null> {
+  try {
+    const baseDir = FileStorageService.getBaseDir();
+    const avatarsDir = path.join(baseDir, '_avatars', 'telegram');
+    await fs.promises.mkdir(avatarsDir, { recursive: true });
+    const filePath = path.join(avatarsDir, filename);
+    await writeMediaFile(filePath, buffer);
+    return filePath;
+  } catch {
+    return null;
+  }
+}
+
+async function saveMediaToDisk(buffer: Buffer, filename: string, msgType: string): Promise<string | null> {
+  try {
+    const baseDir = FileStorageService.getBaseDir();
+
+    let subfolder = 'files';
+    if (msgType === 'photo') subfolder = 'images';
+    else if (msgType === 'video') subfolder = 'videos';
+    else if (msgType === 'audio') subfolder = 'voices';
+    else if (msgType === 'sticker') subfolder = 'stickers';
+
+    // Extract accountId from filename (format: accountId_threadId_msgId.ext)
+    const parts = filename.split('_');
+    const accountId = parts[0] || 'unknown';
+
+    const mediaDir = path.join(baseDir, accountId, subfolder);
+    await fs.promises.mkdir(mediaDir, { recursive: true });
+
+    const filePath = path.join(mediaDir, filename);
+    await writeMediaFile(filePath, buffer);
+    return filePath;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Public API ──────────────────────────────────────────────────────────────
+
+/**
+ * Send a message through the Telegram Bot
+ */
+export interface TelegramBotSendMessageParams {
+  accountId: string;
+  chatId: string;
+  text: string;
+  parseMode?: string;
+  /** Native Telegram reply_markup payload (ReplyKeyboardMarkup/InlineKeyboardMarkup). */
+  replyMarkup?: Record<string, any>;
+  mentions?: Array<{ uid: string; pos: number; len: number }>;
+}
+
+/**
+ * Sends a Bot API message.  Keep the positional overload for existing IPC
+ * callers while also accepting the object form used by the workflow engine.
+ */
+export async function sendMessage(
+  accountOrParams: string | TelegramBotSendMessageParams,
+  legacyChatId?: string,
+  legacyText?: string,
+  legacyParseMode?: string,
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const params: TelegramBotSendMessageParams = typeof accountOrParams === 'string'
+    ? { accountId: accountOrParams, chatId: legacyChatId || '', text: legacyText || '', parseMode: legacyParseMode }
+    : accountOrParams;
+  const { accountId, chatId, text, parseMode, replyMarkup, mentions } = params;
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  if (!bot.botToken) return { success: false, error: 'Bot token missing' };
+
+  try {
+    const payload: Record<string, any> = { chat_id: chatId, text };
+    const mentionAttachments = (mentions || [])
+      .map((mention) => ({
+        type: 'telegram_mention',
+        offset: Math.max(0, Number(mention.pos || 0)),
+        length: Math.max(0, Number(mention.len || 0)),
+        user_id: String(mention.uid || ''),
+      }))
+      .filter((mention) => mention.user_id && mention.length > 0 && mention.offset + mention.length <= text.length);
+    // Bot API text_mention needs a complete User object. A tg://user link is
+    // the supported portable equivalent when the composer only has the ID.
+    if (mentionAttachments.length > 0) {
+      payload.entities = mentionAttachments.map((mention) => ({
+        type: 'text_link',
+        offset: mention.offset,
+        length: mention.length,
+        url: `tg://user?id=${mention.user_id}`,
+      }));
+    } else if (parseMode) {
+      payload.parse_mode = parseMode;
+    }
+    if (replyMarkup) payload.reply_markup = replyMarkup;
+
+    const sentAt = Date.now();
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendMessage`, payload, {
+      timeout: REQUEST_TIMEOUT,
+    });
+
+    // Validate response
+    if (!res.data?.ok) {
+      Logger.warn(`[TelegramBot] sendMessage failed: ${res.data?.description || 'unknown error'}`);
+      return { success: false, error: res.data?.description || 'Telegram API error' };
+    }
+
+    const result = res.data?.result;
+    const msgId = result?.message_id ? String(result.message_id) : '';
+
+    if (!msgId) {
+      // Message was sent but we didn't get a message_id back
+      Logger.warn(`[TelegramBot] sendMessage: no message_id in response, result=${JSON.stringify(result)}`);
+      return { success: true }; // Still success, but without msgId
+    }
+
+    // Detect threadType: Telegram group/channel IDs are negative
+    const threadType = chatId.startsWith('-') ? 1 : 0;
+    // Server time of the message (Bot API `date`), not the machine's time: a machine running a few seconds fast would let a customer's immediate reply sort before it
+    const sentTimestamp = telegramSentTimestamp(result, sentAt);
+
+    // Save sent message to DB
+    await saveMessage({
+      accountId,
+      threadId: chatId,
+      threadType,
+      senderId: accountId,
+      senderName: bot.botFirstName,
+      messageId: msgId,
+      content: text,
+      msgType: 'text',
+      timestamp: sentTimestamp,
+      isSelf: true,
+      attachments: mentionAttachments,
+    });
+
+    // Emit event so UI updates (self-sent messages won't come via polling)
+    EventBroadcaster.emit('event:message', {
+      zaloId: accountId,
+      channel: 'telegram_bot',
+      message: {
+        channel: 'telegram_bot',
+        type: threadType,
+        threadId: chatId,
+        isSelf: true,
+        data: {
+          uidFrom: accountId,
+          idTo: chatId,
+          msgId,
+          content: text,
+          preview: text,
+          msgType: 'text',
+          channel: 'telegram_bot',
+          ts: String(sentTimestamp),
+          dName: bot.botFirstName,
+          attachments: mentionAttachments,
+        },
+      },
+    });
+
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    Logger.error(`[TelegramBot] sendMessage error: ${err.message}`);
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Helper: save a self-sent bot message to DB and emit event for UI.
+ */
+async function saveSentBotMessage(
+  accountId: string,
+  chatId: string,
+  msgId: string,
+  content: string,
+  msgType: string,
+  attachments: any[] = [],
+  /** Bot API result (`result`): take the server `date` as the message's time */
+  sentResult?: unknown,
+): Promise<void> {
+  if (!msgId) return;
+  const threadType = chatId.startsWith('-') ? 1 : 0;
+  const bot = registeredAccounts.get(accountId);
+  const botName = bot?.botFirstName || 'Bot';
+  const sentTimestamp = telegramSentTimestamp(sentResult);
+
+  await saveMessage({
+    accountId,
+    threadId: chatId,
+    threadType,
+    senderId: accountId,
+    senderName: botName,
+    messageId: msgId,
+    content: content || '',
+    msgType,
+    timestamp: sentTimestamp,
+    isSelf: true,
+    attachments,
+  });
+
+  try {
+    EventBroadcaster.emit('event:message', {
+      zaloId: accountId,
+      channel: 'telegram_bot',
+      message: {
+        channel: 'telegram_bot',
+        type: threadType,
+        threadId: chatId,
+        isSelf: true,
+        data: {
+          uidFrom: accountId,
+          idTo: chatId,
+          msgId,
+          content: content || '',
+          preview: getTelegramMessagePreview(msgType, content || ''),
+          msgType,
+          channel: 'telegram_bot',
+          ts: String(sentTimestamp),
+          dName: botName,
+          attachments,
+        },
+      },
+    });
+  } catch {}
+}
+
+/**
+ * Save + emit an event for one photo message the bot just sent (sendPhoto or one item of sendMediaGroup).
+ * Returns the message_id ('' when Telegram returns no id).
+ */
+async function recordSentBotPhoto(accountId: string, chatId: string, bot: BotAccount, result: any, caption?: string): Promise<string> {
+    // Telegram photo response: result.message_id exists at top level
+    const msgId = result?.message_id ? String(result.message_id) : '';
+    if (!msgId) {
+      Logger.warn(`[TelegramBot] sendPhoto: no message_id in response, result=${JSON.stringify(result).slice(0, 200)}`);
+    }
+
+    // Save sent photo to DB and emit event
+    if (msgId) {
+      const threadType = chatId.startsWith('-') ? 1 : 0;
+      const sentTimestamp = telegramSentTimestamp(result); // server time (`date`), not the machine's time
+      // Extract photo attachments from API response
+      const photoAttachments = (result?.photo || []).map((p: any) => ({
+        type: 'photo',
+        file_id: p.file_id,
+        file_unique_id: p.file_unique_id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+      }));
+      await saveMessage({
+        accountId,
+        threadId: chatId,
+        threadType,
+        senderId: accountId,
+        senderName: bot.botFirstName,
+        messageId: msgId,
+        content: caption || '',
+        msgType: 'photo',
+        timestamp: sentTimestamp,
+        isSelf: true,
+        attachments: photoAttachments,
+      });
+
+      // Emit event FIRST so UI adds message to store
+      try {
+        const { EventBroadcaster } = require('../../event/EventBroadcaster');
+        EventBroadcaster.emit('event:message', {
+          zaloId: accountId,
+          channel: 'telegram_bot',
+          message: {
+            channel: 'telegram_bot',
+            type: threadType,
+            threadId: chatId,
+            isSelf: true,
+            data: {
+              uidFrom: accountId,
+              idTo: chatId,
+              msgId,
+              content: caption || '',
+              preview: getTelegramMessagePreview('photo', caption || ''),
+              msgType: 'photo',
+              channel: 'telegram_bot',
+              ts: String(sentTimestamp),
+              dName: bot.botFirstName,
+              attachments: photoAttachments,
+            },
+          },
+        });
+      } catch {}
+
+      // Download photo AFTER event is emitted (so message is in store when localPath arrives)
+      if (photoAttachments.length > 0) {
+        const largestPhoto = photoAttachments[photoAttachments.length - 1];
+        downloadBotMedia(bot.botToken, largestPhoto.file_id, `photo_${msgId}.jpg`, 'photo', accountId, msgId, chatId).catch(() => {});
+      }
+    }
+
+    return msgId;
+}
+
+/**
+ * Send a photo through the Telegram Bot
+ */
+export async function sendPhoto(accountId: string, chatId: string, photoPath: string, caption?: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  if (!bot.botToken) return { success: false, error: 'Bot token missing' };
+
+  try {
+    const FormDataNode = require('form-data');
+    const form = new FormDataNode();
+    form.append('chat_id', chatId);
+    appendBotUpload(form, 'photo', photoPath);
+    if (caption) form.append('caption', caption);
+
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendPhoto`, form, {
+      headers: form.getHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+
+    Logger.log(`[TelegramBot] sendPhoto response: ok=${res.data?.ok}, message_id=${res.data?.result?.message_id}, result_keys=${Object.keys(res.data?.result || {}).join(',')}`);
+
+    if (!res.data?.ok) {
+      return { success: false, error: res.data?.description || 'Telegram API error' };
+    }
+
+    const msgId = await recordSentBotPhoto(accountId, chatId, bot, res.data?.result, caption);
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/** Telegram media groups hold 2–10 items. */
+const BOT_ALBUM_MAX = 10;
+
+/**
+ * Send several photos as one album (sendMediaGroup), the caption on the first photo: Telegram shows the caption
+ * below the album. Each photo in the album is a separate message in the DB (as when an album is received).
+ */
+export async function sendPhotoAlbum(
+  accountId: string,
+  chatId: string,
+  photoPaths: string[],
+  caption?: string,
+): Promise<{ success: boolean; messageId?: string; messageIds?: string[]; error?: string }> {
+  const photos = photoPaths.filter(Boolean);
+  if (photos.length === 0) return { success: false, error: tr('Không có ảnh để gửi') };
+  if (photos.length === 1) return sendPhoto(accountId, chatId, photos[0], caption);
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  if (!bot.botToken) return { success: false, error: 'Bot token missing' };
+
+  try {
+    const FormDataNode = require('form-data');
+    const messageIds: string[] = [];
+    for (let start = 0; start < photos.length; start += BOT_ALBUM_MAX) {
+      const chunk = photos.slice(start, start + BOT_ALBUM_MAX);
+      const chunkCaption = start === 0 ? caption : undefined;
+      if (chunk.length === 1) {
+        // sendMediaGroup needs at least 2 items.
+        const single = await sendPhoto(accountId, chatId, chunk[0], chunkCaption);
+        if (!single.success) return { success: false, error: single.error, messageIds };
+        if (single.messageId) messageIds.push(single.messageId);
+        continue;
+      }
+      const form = new FormDataNode();
+      form.append('chat_id', chatId);
+      const media = chunk.map((photoPath, index) => {
+        const item: Record<string, string> = { type: 'photo' };
+        if (photoPath.startsWith('http://') || photoPath.startsWith('https://')) {
+          item.media = photoPath;
+        } else {
+          const field = `photo${index}`;
+          appendBotUpload(form, field, photoPath);
+          item.media = `attach://${field}`;
+        }
+        if (index === 0 && chunkCaption) item.caption = chunkCaption;
+        return item;
+      });
+      form.append('media', JSON.stringify(media));
+      const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendMediaGroup`, form, {
+        headers: form.getHeaders(),
+        timeout: REQUEST_TIMEOUT,
+      });
+      if (!res.data?.ok) {
+        return { success: false, error: res.data?.description || 'Telegram API error', messageIds };
+      }
+      for (const message of (Array.isArray(res.data?.result) ? res.data.result : [])) {
+        const msgId = await recordSentBotPhoto(accountId, chatId, bot, message, message?.caption || undefined);
+        if (msgId) messageIds.push(msgId);
+      }
+    }
+    Logger.log(`[TelegramBot] sendPhotoAlbum chat=${chatId} items=${photos.length} messages=${messageIds.length}`);
+    return { success: true, messageId: messageIds[0], messageIds };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Send a video through the Telegram Bot
+ */
+export async function sendVideo(accountId: string, chatId: string, videoPath: string, caption?: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  if (!bot.botToken) return { success: false, error: 'Bot token missing' };
+  try {
+    const fs = require('fs');
+    const FormDataNode = require('form-data');
+    const form = new FormDataNode();
+    form.append('chat_id', chatId);
+    appendBotUpload(form, 'video', videoPath);
+    if (caption) form.append('caption', caption);
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendVideo`, form, {
+      headers: form.getHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (!res.data?.ok) return { success: false, error: res.data?.description || 'Telegram API error' };
+    const msgId = res.data?.result?.message_id ? String(res.data.result.message_id) : '';
+    if (msgId) {
+      const videoAttachments = res.data?.result?.video ? [{
+        type: 'video', file_id: res.data.result.video.file_id,
+        file_unique_id: res.data.result.video.file_unique_id,
+        width: res.data.result.video.width, height: res.data.result.video.height,
+        duration: res.data.result.video.duration, file_size: res.data.result.video.file_size,
+      }] : [];
+      await saveSentBotMessage(accountId, chatId, msgId, caption || '', 'video', videoAttachments, res.data?.result);
+    }
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Send a document/file through the Telegram Bot
+ */
+export async function sendDocument(accountId: string, chatId: string, filePath: string, caption?: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  if (!bot.botToken) return { success: false, error: 'Bot token missing' };
+  try {
+    const fs = require('fs');
+    const FormDataNode = require('form-data');
+    const form = new FormDataNode();
+    form.append('chat_id', chatId);
+    appendBotUpload(form, 'document', filePath);
+    if (caption) form.append('caption', caption);
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendDocument`, form, {
+      headers: form.getHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (!res.data?.ok) return { success: false, error: res.data?.description || 'Telegram API error' };
+    const msgId = res.data?.result?.message_id ? String(res.data.result.message_id) : '';
+    if (msgId) {
+      const docAttachments = res.data?.result?.document ? [{
+        type: 'file', file_id: res.data.result.document.file_id,
+        file_unique_id: res.data.result.document.file_unique_id,
+        file_name: res.data.result.document.file_name,
+        mime_type: res.data.result.document.mime_type,
+        file_size: res.data.result.document.file_size,
+      }] : [];
+      await saveSentBotMessage(accountId, chatId, msgId, caption || '', 'file', docAttachments, res.data?.result);
+    }
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Send audio through the Telegram Bot
+ */
+export async function sendAudio(accountId: string, chatId: string, audioPath: string, caption?: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  if (!bot.botToken) return { success: false, error: 'Bot token missing' };
+  try {
+    const fs = require('fs');
+    const FormDataNode = require('form-data');
+    const form = new FormDataNode();
+    form.append('chat_id', chatId);
+    appendBotUpload(form, 'audio', audioPath);
+    if (caption) form.append('caption', caption);
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendAudio`, form, {
+      headers: form.getHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (!res.data?.ok) return { success: false, error: res.data?.description || 'Telegram API error' };
+    const msgId = res.data?.result?.message_id ? String(res.data.result.message_id) : '';
+    if (msgId) {
+      const audioAttachments = res.data?.result?.audio ? [{
+        type: 'audio', file_id: res.data.result.audio.file_id,
+        duration: res.data.result.audio.duration,
+        title: res.data.result.audio.title,
+        file_size: res.data.result.audio.file_size,
+      }] : [];
+      await saveSentBotMessage(accountId, chatId, msgId, caption || '', 'audio', audioAttachments, res.data?.result);
+    }
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Forward a message
+ */
+export async function forwardMessage(accountId: string, chatId: string, fromChatId: string, messageId: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/forwardMessage`, {
+      chat_id: chatId,
+      from_chat_id: fromChatId,
+      message_id: messageId,
+    }, { timeout: REQUEST_TIMEOUT });
+    if (!res.data?.ok) return { success: false, error: res.data?.description || 'Telegram API error' };
+    return { success: true, messageId: String(res.data.result?.message_id || '') };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Delete a message
+ */
+export async function deleteMessage(accountId: string, chatId: string, messageId: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/deleteMessage`, {
+      chat_id: chatId,
+      message_id: messageId,
+    }, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok, error: res.data?.ok ? undefined : res.data?.description || 'Telegram API error' };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Add a reaction
+ */
+export async function addReaction(accountId: string, chatId: string, messageId: string, emoji: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/setMessageReaction`, {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: JSON.stringify([{ type: 'emoji', emoji }]),
+    }, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok, error: res.data?.ok ? undefined : res.data?.description || 'Telegram API error' };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Pin a message
+ */
+export async function pinMessage(accountId: string, chatId: string, messageId: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/pinChatMessage`, {
+      chat_id: chatId,
+      message_id: messageId,
+    }, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok, error: res.data?.ok ? undefined : res.data?.description || 'Telegram API error' };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Create a poll
+ */
+export async function sendPoll(accountId: string, chatId: string, question: string, options: string[]): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendPoll`, {
+      chat_id: chatId,
+      question,
+      options: JSON.stringify(options),
+      is_anonymous: false,
+    }, { timeout: REQUEST_TIMEOUT });
+    if (!res.data?.ok) return { success: false, error: res.data?.description || 'Telegram API error' };
+    const result = res.data.result || {};
+    const messageId = String(result.message_id || '');
+    if (messageId) {
+      await saveSentBotMessage(
+        accountId,
+        chatId,
+        messageId,
+        String(result.poll?.question || question),
+        'telegram.poll',
+        [normalizeBotPollAttachment(result.poll || { question, options })],
+        result,
+      );
+    }
+    return { success: true, messageId };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Edit a message
+ */
+export async function editMessage(accountId: string, chatId: string, messageId: string, text: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/editMessageText`, {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+    }, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok, error: res.data?.ok ? undefined : res.data?.description || 'Telegram API error' };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Send a sticker
+ */
+export async function sendSticker(accountId: string, chatId: string, stickerPath: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const fs = require('fs');
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('chat_id', chatId);
+    appendBotUpload(form, 'sticker', stickerPath);
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendSticker`, form, {
+      headers: form.getHeaders(), timeout: 30000,
+    });
+    if (!res.data?.ok) return { success: false, error: res.data?.description || 'Telegram API error' };
+    const msgId = String(res.data?.result?.message_id || '');
+    if (msgId) {
+      const stickerAttachments = res.data?.result?.sticker ? [{
+        type: 'sticker', is_sticker: true,
+        sticker_format: res.data.result.sticker.is_animated ? 'tgs' : res.data.result.sticker.is_video ? 'webm' : 'webp',
+        mime_type: res.data.result.sticker.is_animated ? 'application/x-tgsticker' : res.data.result.sticker.is_video ? 'video/webm' : 'image/webp',
+        file_id: res.data.result.sticker.file_id,
+        file_unique_id: res.data.result.sticker.file_unique_id,
+        emoji: res.data.result.sticker.emoji,
+      }] : [];
+      await saveSentBotMessage(accountId, chatId, msgId, '', 'sticker', stickerAttachments, res.data?.result);
+    }
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Send a voice message
+ */
+export async function sendVoice(accountId: string, chatId: string, voicePath: string, caption?: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const fs = require('fs');
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('chat_id', chatId);
+    appendBotUpload(form, 'voice', voicePath);
+    if (caption) form.append('caption', caption);
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendVoice`, form, {
+      headers: form.getHeaders(), timeout: 30000,
+    });
+    if (!res.data?.ok) return { success: false, error: res.data?.description || 'Telegram API error' };
+    const msgId = String(res.data?.result?.message_id || '');
+    if (msgId) {
+      const voiceAttachments = res.data?.result?.voice ? [{
+        type: 'voice', file_id: res.data.result.voice.file_id,
+        duration: res.data.result.voice.duration,
+        file_size: res.data.result.voice.file_size,
+      }] : [];
+      await saveSentBotMessage(accountId, chatId, msgId, caption || '', 'voice', voiceAttachments, res.data?.result);
+    }
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Send an animation/GIF
+ */
+export async function sendAnimation(accountId: string, chatId: string, animPath: string, caption?: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const fs = require('fs');
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('chat_id', chatId);
+    appendBotUpload(form, 'animation', animPath);
+    if (caption) form.append('caption', caption);
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendAnimation`, form, {
+      headers: form.getHeaders(), timeout: 30000,
+    });
+    if (!res.data?.ok) return { success: false, error: res.data?.description || 'Telegram API error' };
+    const msgId = String(res.data?.result?.message_id || '');
+    if (msgId) {
+      const animAttachments = res.data?.result?.animation ? [{
+        type: 'gif', file_id: res.data.result.animation.file_id,
+        file_unique_id: res.data.result.animation.file_unique_id,
+        width: res.data.result.animation.width,
+        height: res.data.result.animation.height,
+        duration: res.data.result.animation.duration,
+        file_size: res.data.result.animation.file_size,
+        mime_type: res.data.result.animation.mime_type || '',
+      }] : [];
+      await saveSentBotMessage(accountId, chatId, msgId, caption || '', 'gif', animAttachments, res.data?.result);
+    }
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Send a video note (round video)
+ */
+export async function sendVideoNote(accountId: string, chatId: string, videoPath: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const fs = require('fs');
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('chat_id', chatId);
+    appendBotUpload(form, 'video_note', videoPath);
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendVideoNote`, form, {
+      headers: form.getHeaders(), timeout: 30000,
+    });
+    if (!res.data?.ok) return { success: false, error: res.data?.description || 'Telegram API error' };
+    const msgId = String(res.data?.result?.message_id || '');
+    if (msgId) {
+      const vnAttachments = res.data?.result?.video_note ? [{
+        type: 'video_note',
+        file_id: res.data.result.video_note.file_id,
+        file_unique_id: res.data.result.video_note.file_unique_id,
+        length: res.data.result.video_note.length,
+        duration: res.data.result.video_note.duration,
+        file_size: res.data.result.video_note.file_size,
+      }] : [];
+      await saveSentBotMessage(accountId, chatId, msgId, '', 'video_note', vnAttachments, res.data?.result);
+    }
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Send a contact
+ */
+export async function sendContact(accountId: string, chatId: string, phone: string, firstName: string, lastName?: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const payload: Record<string, any> = { chat_id: chatId, phone_number: phone, first_name: firstName };
+    if (lastName) payload.last_name = lastName;
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendContact`, payload, { timeout: REQUEST_TIMEOUT });
+    return { success: true, messageId: String(res.data?.result?.message_id || '') };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Send a location
+ */
+export async function sendLocation(accountId: string, chatId: string, latitude: number, longitude: number): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendLocation`, {
+      chat_id: chatId, latitude, longitude,
+    }, { timeout: REQUEST_TIMEOUT });
+    return { success: true, messageId: String(res.data?.result?.message_id || '') };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Show the typing indicator
+ */
+export async function sendChatAction(accountId: string, chatId: string, action: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/sendChatAction`, {
+      chat_id: chatId, action: action || 'typing',
+    }, { timeout: 5000 });
+    return { success: !!res.data?.ok, error: res.data?.ok ? undefined : res.data?.description || 'Telegram API error' };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/** Acknowledge an inline keyboard callback, optionally with a toast or alert. */
+export async function answerCallbackQuery(accountId: string, callbackQueryId: string, text?: string, showAlert = false): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const payload: Record<string, any> = { callback_query_id: callbackQueryId };
+    if (text) payload.text = text;
+    if (showAlert) payload.show_alert = true;
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/answerCallbackQuery`, payload, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok, error: res.data?.ok ? undefined : res.data?.description };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Unpin a message
+ */
+export async function unpinChatMessage(accountId: string, chatId: string, messageId?: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const payload: Record<string, any> = { chat_id: chatId };
+    if (messageId) payload.message_id = messageId;
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/unpinChatMessage`, payload, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Get the group member count
+ */
+export async function getChatMemberCount(accountId: string, chatId: string): Promise<ActionResult & { count?: number }> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const res = await axios.get(`${TELEGRAM_API}/bot${bot.botToken}/getChatMemberCount`, {
+      params: { chat_id: chatId }, timeout: REQUEST_TIMEOUT,
+    });
+    if (res.data?.ok) return { success: true, count: res.data.result };
+    return { success: false, error: res.data?.description || 'Failed' };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Restrict a member (mute / restrict)
+ */
+export async function restrictChatMember(accountId: string, chatId: string, userId: string, permissions: {
+  canSendMessages?: boolean; canSendAudios?: boolean; canSendDocuments?: boolean;
+  canSendPhotos?: boolean; canSendVideos?: boolean; canSendVideoNotes?: boolean;
+  canSendVoiceNotes?: boolean; canSendPolls?: boolean; canSendOtherMessages?: boolean;
+  canAddWebPagePreviews?: boolean; canChangeInfo?: boolean; canInviteUsers?: boolean;
+  canPinMessages?: boolean;
+}, untilDate?: number): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    const payload: Record<string, any> = {
+      chat_id: chatId, user_id: userId,
+      permissions: { ...permissions },
+    };
+    if (untilDate) payload.until_date = untilDate;
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/restrictChatMember`, payload, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Edit the caption of a media message
+ */
+export async function editMessageCaption(accountId: string, chatId: string, messageId: string, caption: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+  try {
+    await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/editMessageCaption`, {
+      chat_id: chatId, message_id: messageId, caption,
+    }, { timeout: REQUEST_TIMEOUT });
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+type ActionResult = { success: boolean; messageId?: string; error?: string };
+
+/**
+ * Start bot: registers inbox consumer with ingress and starts polling.
+ */
+/** Inbox consumer of the bot: saves messages, downloads media, emits events for the UI / workflows. */
+function createInboxConsumer(): BotUpdateConsumer {
+  return async (acc, update) => {
+    Logger.log(`[TelegramBot] Received update: kind=${update.kind} accountId=${acc.accountId}`);
+    // Handle both regular messages and channel posts
+    if ((update.kind === 'message' || update.kind === 'channel_post') && update.message) {
+      Logger.log(`[TelegramBot] Processing message from ${update.message.fromName}: ${(update.message.text || '').slice(0, 50)}`);
+      if (update.message.raw?.poll_option_added) {
+        await handleBotPollOptionAdded(acc, update.message.raw);
+        return;
+      }
+      await handleInboundMessage(acc, update.message.raw);
+    }
+    if ((update.kind === 'edited_message' || update.kind === 'edited_channel_post') && update.editedMessage) {
+      const message = update.editedMessage;
+      if (message.raw?.poll) await updateBotPollMessage(acc, message.raw);
+      EventBroadcaster.emit('event:telegramBotEditedMessage', {
+        zaloId: acc.accountId,
+        accountId: acc.accountId,
+        channel: 'telegram_bot',
+        chatId: message.chatId,
+        threadId: message.chatId,
+        fromId: message.fromId,
+        fromName: message.fromName,
+        messageId: message.messageId,
+        content: message.text,
+        chatType: message.chatType,
+        timestamp: message.date || Date.now(),
+        message: {
+          channel: 'telegram_bot',
+          threadId: message.chatId,
+          data: {
+            uidFrom: message.fromId,
+            idTo: message.chatId,
+            msgId: message.messageId,
+            content: message.text,
+            msgType: 'text',
+            chatType: message.chatType,
+          },
+        },
+        rawUpdate: update.raw,
+      });
+    }
+    if (update.kind === 'poll' && update.poll) {
+      await updateBotPollResults(acc, update.poll);
+    }
+    if (update.kind === 'chat_join_request' && update.chatJoinRequest) {
+      const request = update.chatJoinRequest;
+      const chat = request.chat || {};
+      const from = request.from || {};
+      EventBroadcaster.emit('event:telegramBotJoinRequest', {
+        zaloId: acc.accountId,
+        accountId: acc.accountId,
+        channel: 'telegram_bot',
+        chatId: String(chat.id || ''),
+        threadId: String(chat.id || ''),
+        chatTitle: chat.title || '',
+        chatType: chat.type || '',
+        fromId: String(from.id || ''),
+        fromName: [from.first_name, from.last_name].filter(Boolean).join(' ') || String(from.username || from.id || ''),
+        bio: request.bio || '',
+        timestamp: Number(request.date || Math.floor(Date.now() / 1000)) * 1000,
+        rawUpdate: update.raw,
+      });
+    }
+    if (update.kind === 'callback_query' && update.callbackQuery) {
+      const query = update.callbackQuery;
+      const chatId = String(query.message?.chat?.id || '');
+      const from = query.from || {};
+      const callbackData = String(query.data || '');
+
+      // Acknowledge immediately so Telegram does not leave the button spinning
+      // while a workflow is being queued/executed.
+      void axios.post(`${TELEGRAM_API}/bot${acc.botToken}/answerCallbackQuery`, {
+        callback_query_id: query.id,
+      }, { timeout: REQUEST_TIMEOUT }).catch((err: any) => {
+        Logger.warn(`[TelegramBot] answerCallbackQuery failed: ${err.message}`);
+      });
+
+      EventBroadcaster.emit('event:telegramBotCallback', {
+        zaloId: acc.accountId,
+        accountId: acc.accountId,
+        channel: 'telegram_bot',
+        chatId,
+        threadId: chatId,
+        fromId: String(from.id || ''),
+        fromName: [from.first_name, from.last_name].filter(Boolean).join(' ') || String(from.username || from.id || ''),
+        callbackQueryId: String(query.id || ''),
+        callbackData,
+        messageId: String(query.message?.message_id || ''),
+        rawUpdate: update.raw,
+      });
+    }
+    if (update.kind === 'my_chat_member' && update.chatMember) {
+      const member = update.chatMember;
+      const chat = member.chat || {};
+      const previousStatus = String(member.old_chat_member?.status || '');
+      const currentStatus = String(member.new_chat_member?.status || '');
+      const wasInChat = !['left', 'kicked'].includes(previousStatus);
+      const isInChat = !['left', 'kicked'].includes(currentStatus);
+      const eventType = !wasInChat && isInChat ? 'added'
+        : wasInChat && !isInChat ? 'removed'
+        : 'permissions_changed';
+      const actor = member.from || {};
+      EventBroadcaster.emit('event:telegramBotMembership', {
+        zaloId: acc.accountId,
+        accountId: acc.accountId,
+        channel: 'telegram_bot',
+        chatId: String(chat.id || ''),
+        threadId: String(chat.id || ''),
+        chatTitle: chat.title || [chat.first_name, chat.last_name].filter(Boolean).join(' ') || '',
+        chatType: chat.type || '',
+        eventType,
+        previousStatus,
+        currentStatus,
+        actorId: String(actor.id || ''),
+        actorName: [actor.first_name, actor.last_name].filter(Boolean).join(' ') || String(actor.username || actor.id || ''),
+        timestamp: Number(member.date || Math.floor(Date.now() / 1000)) * 1000,
+        rawUpdate: update.raw,
+      });
+    }
+    // Another member joined / left / was removed (chat_member: Telegram sends it only while the bot is an admin of the group)
+    if (update.kind === 'chat_member' && update.chatMember) {
+      const member = update.chatMember;
+      const chat = member.chat || {};
+      const user = member.new_chat_member?.user || member.old_chat_member?.user || {};
+      const previousStatus = String(member.old_chat_member?.status || '');
+      const currentStatus = String(member.new_chat_member?.status || '');
+      const wasInChat = !['left', 'kicked'].includes(previousStatus);
+      const isInChat = !['left', 'kicked'].includes(currentStatus);
+      const eventType = !wasInChat && isInChat ? 'joined'
+        : wasInChat && !isInChat ? (currentStatus === 'kicked' ? 'removed' : 'left')
+        : 'changed';
+      const actor = member.from || {};
+      EventBroadcaster.emit('event:telegramBotMemberUpdate', {
+        zaloId: acc.accountId,
+        accountId: acc.accountId,
+        channel: 'telegram_bot',
+        chatId: String(chat.id || ''),
+        threadId: String(chat.id || ''),
+        chatTitle: chat.title || '',
+        chatType: chat.type || '',
+        eventType,
+        previousStatus,
+        currentStatus,
+        memberId: String(user.id || ''),
+        memberName: [user.first_name, user.last_name].filter(Boolean).join(' ') || String(user.username || user.id || ''),
+        memberUsername: user.username || '',
+        isBot: !!user.is_bot,
+        actorId: String(actor.id || ''),
+        actorName: [actor.first_name, actor.last_name].filter(Boolean).join(' ') || String(actor.username || actor.id || ''),
+        timestamp: Number(member.date || Math.floor(Date.now() / 1000)) * 1000,
+        rawUpdate: update.raw,
+      });
+    }
+  };
+}
+
+/**
+ * Attach the bot to the ingress (one getUpdates loop per token) and register the inbox consumer, even while the token's poller is
+ * paused, so the inbox is not lost when receiving resumes. false = the token is being received by somewhere else (409).
+ */
+function attachIngress(account: BotAccount): boolean {
+  const polling = BotIngress.startBot(account);
+  const consumer = (account as any)._inboxConsumer as BotUpdateConsumer | undefined;
+  if (consumer) BotIngress.registerConsumer(account.accountId, consumer);
+  return polling;
+}
+
+function emitBotConnected(account: BotAccount): void {
+  try {
+    const { EventBroadcaster } = require('../../event/EventBroadcaster');
+    EventBroadcaster.emit('event:connected', {
+      zaloId: account.accountId,
+      accountInfo: {
+        full_name: account.botFirstName || account.botUsername || 'Telegram Bot',
+        channel: 'telegram_bot',
+      },
+    });
+  } catch {}
+}
+
+/** Remove the bot from the ingress + the registration list (does not notify the UI). */
+function detachBot(accountId: string): void {
+  const account = registeredAccounts.get(accountId);
+  if (account) {
+    const consumer = (account as any)._inboxConsumer;
+    if (consumer) BotIngress.unregisterConsumer(accountId, consumer);
+  }
+  registeredAccounts.delete(accountId);
+  BotIngress.stopBot(accountId);
+}
+
+export function startBot(account: TelegramBotAccount): void {
+  const registered = registeredAccounts.get(account.accountId);
+  if (registered && registered.botToken === account.botToken) {
+    // Already registered, same token = the user clicked reconnect. The bot's poller is paused (someone else receives the bot's messages, or the token is wrong) →
+    // run again at once, keeping the consumer. Previously this returned straight away: the UI reported connected but the bot received no messages
+    // until the app is reopened.
+    if (BotIngress.isPollerRunning(account.accountId)) return;
+    const resumed = BotIngress.resumeBot(account.accountId) || attachIngress(registered);
+    if (resumed) {
+      emitBotConnected(registered);
+      Logger.log(`[TelegramBotChannel] Resumed polling for ${account.accountId} (@${registered.botUsername})`);
+    }
+    return;
+  }
+  // Token has the wrong format, usually an encrypted copy that cannot be decrypted on this machine: do not register it; the health check will try
+  // reconnecting every minute forever
+  if (!isTelegramBotToken(account.botToken)) {
+    throw new Error(tr('Token bot không hợp lệ hoặc không giải mã được trên máy này. Vui lòng kết nối lại bot bằng token.'));
+  }
+  // Reconnect with a new token: remove the registration of the old token
+  if (registered) detachBot(account.accountId);
+  registeredAccounts.set(account.accountId, account);
+  DatabaseService.getInstance()?.repairTelegramLastMessagePreviews(account.accountId, 'telegram_bot');
+
+  // Store consumer reference for cleanup
+  (account as any)._inboxConsumer = createInboxConsumer();
+  if (!attachIngress(account)) {
+    Logger.warn(`[TelegramBotChannel] Bot ${account.accountId} is configured but polling is paused because this token is in use elsewhere.`);
+    return;
+  }
+
+  // Emit connected event so UI knows bot is online
+  emitBotConnected(account);
+
+  Logger.log(`[TelegramBotChannel] Registered inbox consumer for ${account.accountId} (@${account.botUsername})`);
+}
+
+/**
+ * Stop bot: unregisters consumer and stops ingress.
+ */
+export function stopBot(accountId: string): void {
+  detachBot(accountId);
+
+  // Emit disconnected event so UI knows bot is offline
+  try {
+    const { EventBroadcaster } = require('../../event/EventBroadcaster');
+    EventBroadcaster.emit('event:disconnected', {
+      zaloId: accountId,
+      reason: 'manual_disconnect',
+    });
+  } catch {}
+
+  Logger.log(`[TelegramBotChannel] Stopped for ${accountId}`);
+}
+
+/**
+ * Stop all bots
+ */
+export function stopAllBots(): void {
+  for (const [id] of registeredAccounts) {
+    stopBot(id);
+  }
+}
+
+/**
+ * Get active bot status
+ */
+export function getActiveBots(): TelegramBotAccount[] {
+  return Array.from(registeredAccounts.values());
+}
+
+/**
+ * Check if a bot is actively polling (not just registered).
+ * Returns true if the bot's ingress poller is running.
+ */
+export function isBotPolling(accountId: string): boolean {
+  return registeredAccounts.has(accountId) && BotIngress.isPollerRunning(accountId);
+}
+
+/** Prevent the periodic health check from fighting an external getUpdates consumer. */
+export function isBotPollingConflict(accountId: string): boolean {
+  return registeredAccounts.has(accountId) && BotIngress.hasPollingConflict(accountId);
+}
+
+/** The bot's receiving state for the UI: polling / conflict (received elsewhere) / unauthorized / not_found / stopped. */
+export function getBotPollState(accountId: string): BotIngress.BotPollState {
+  return registeredAccounts.has(accountId) ? BotIngress.getPollState(accountId) : 'stopped';
+}
+
+/**
+ * Attempt to reconnect a bot if it's registered but not polling.
+ * Returns true if reconnection was attempted.
+ */
+export function tryReconnectBot(accountId: string): boolean {
+  const account = registeredAccounts.get(accountId);
+  if (!account) return false;
+
+  // Check if already polling
+  if (BotIngress.isPollerRunning(accountId)) return false;
+  if (BotIngress.hasPollingConflict(accountId)) return false;
+
+  // Re-register with the ingress (with the inbox consumer; before, a new poller had no consumer, so messages were dropped)
+  try {
+    if (!attachIngress(account)) return false;
+    Logger.log(`[TelegramBotChannel] Reconnected bot ${accountId}`);
+    return true;
+  } catch (err: any) {
+    Logger.warn(`[TelegramBotChannel] Failed to reconnect bot ${accountId}: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Validate a bot token with getMe
+ */
+export async function validateBotToken(botToken: string): Promise<{ success: boolean; bot?: any; error?: string }> {
+  return BotIngress.validateBotToken(botToken);
+}
+
+// ─── Group Management API ────────────────────────────────────────────────────
+
+/**
+ * Get group info (name, avatar, description, members)
+ */
+export async function getChat(accountId: string, chatId: string): Promise<ActionResult & { chat?: any }> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const res = await axios.get(`${TELEGRAM_API}/bot${bot.botToken}/getChat`, {
+      params: { chat_id: chatId },
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (res.data?.ok) {
+      return { success: true, chat: res.data.result };
+    }
+    return { success: false, error: res.data?.description || 'Failed' };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Get the group's admin list
+ */
+export async function getChatAdministrators(accountId: string, chatId: string): Promise<ActionResult & { admins?: any[] }> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const res = await axios.get(`${TELEGRAM_API}/bot${bot.botToken}/getChatAdministrators`, {
+      params: { chat_id: chatId },
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (res.data?.ok) {
+      return { success: true, admins: res.data.result };
+    }
+    return { success: false, error: res.data?.description || 'Failed' };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Get info about 1 member of the group
+ */
+export async function getChatMember(accountId: string, chatId: string, userId: string): Promise<ActionResult & { member?: any }> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const res = await axios.get(`${TELEGRAM_API}/bot${bot.botToken}/getChatMember`, {
+      params: { chat_id: chatId, user_id: userId },
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (res.data?.ok) {
+      return { success: true, member: res.data.result };
+    }
+    return { success: false, error: res.data?.description || 'Failed' };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Kick / ban a member from the group
+ */
+export async function banChatMember(accountId: string, chatId: string, userId: string, untilDate?: number): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const payload: Record<string, any> = { chat_id: chatId, user_id: userId };
+    if (untilDate) payload.until_date = untilDate;
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/banChatMember`, payload, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Unban a member
+ */
+export async function unbanChatMember(accountId: string, chatId: string, userId: string, onlyIfBanned?: boolean): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const payload: Record<string, any> = { chat_id: chatId, user_id: userId };
+    if (onlyIfBanned !== undefined) payload.only_if_banned = onlyIfBanned;
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/unbanChatMember`, payload, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Approve or decline a request to join a group (chat_join_request). The bot must be an admin with the "invite users" right.
+ */
+export async function answerChatJoinRequest(accountId: string, chatId: string, userId: string, approve: boolean): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const method = approve ? 'approveChatJoinRequest' : 'declineChatJoinRequest';
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/${method}`, { chat_id: chatId, user_id: userId }, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Promote / demote a member (admin, deputy)
+ */
+export async function promoteChatMember(accountId: string, chatId: string, userId: string, perms?: {
+  canChangeInfo?: boolean; canDeleteMessages?: boolean; canInviteUsers?: boolean;
+  canRestrictMembers?: boolean; canPinMessages?: boolean; canPromoteMembers?: boolean;
+  canManageVideoChats?: boolean; canManageChat?: boolean;
+}): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const payload: Record<string, any> = { chat_id: chatId, user_id: userId };
+    if (perms) Object.assign(payload, perms);
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/promoteChatMember`, payload, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Leave the group
+ */
+export async function leaveChat(accountId: string, chatId: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/leaveChat`, { chat_id: chatId }, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Change the group's photo
+ */
+export async function setChatPhoto(accountId: string, chatId: string, photoPath: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const fs = require('fs');
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('chat_id', chatId);
+    appendBotUpload(form, 'photo', photoPath);
+
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/setChatPhoto`, form, {
+      headers: form.getHeaders(),
+      timeout: 30000,
+    });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Create a group invite link
+ */
+export async function exportChatInviteLink(accountId: string, chatId: string): Promise<ActionResult & { link?: string }> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/exportChatInviteLink`, { chat_id: chatId }, { timeout: REQUEST_TIMEOUT });
+    if (res.data?.ok) {
+      return { success: true, link: res.data.result };
+    }
+    return { success: false, error: res.data?.description || 'Failed' };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Remove the group's photo
+ */
+export async function deleteChatPhoto(accountId: string, chatId: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/deleteChatPhoto`, { chat_id: chatId }, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}
+
+/**
+ * Set the group description
+ */
+export async function setChatDescription(accountId: string, chatId: string, description: string): Promise<ActionResult> {
+  const bot = registeredAccounts.get(accountId);
+  if (!bot) return { success: false, error: 'Bot not active' };
+
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/bot${bot.botToken}/setChatDescription`, {
+      chat_id: chatId, description,
+    }, { timeout: REQUEST_TIMEOUT });
+    return { success: !!res.data?.ok };
+  } catch (err: any) {
+    return { success: false, error: err.response?.data?.description || err.message };
+  }
+}

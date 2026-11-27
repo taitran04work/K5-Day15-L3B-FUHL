@@ -1,0 +1,1359 @@
+import React, { useEffect, useRef, useState } from 'react';
+import DataAccessor from '@/lib/data/DataAccessor';
+import ipc from '../../lib/ipc';
+import { useEmployeeStore } from '@/store/employee/employeeStore';
+import { useAppStore } from '@/store/app/appStore';
+import { useAccountStore } from '@/store/accounts/accountStore';
+import { v4 as uuidv4 } from 'uuid';
+import { showConfirm } from '../common/ConfirmDialog';
+import PageLoading from '../common/PageLoading';
+import { FacebookIcon, ZaloIcon, TelegramIcon } from '../common/avatars/ChannelBadge';
+import type { Channel } from '../../../configs/channels/channelConfig';
+import { getChannelColor, normalizeChannel, getChannelLabel } from '../../../configs/channels/channelConfig';
+import { ChatIcon, HomeIcon, LightningIcon, PackageIcon, PlayIcon, SearchIcon, SmartphoneIcon, TagIcon, UsersIcon } from '@/components/common/icons';
+import { CHANNEL } from '@/lib/channels/channelHelper';
+import { tr, appLocale } from '../../../shared/i18n';
+import { trx } from '@/lib/i18n/trx';
+
+interface PageAccount {
+  zalo_id: string;
+  full_name: string;
+  avatar_url: string;
+  phone?: string;
+  channel?: Channel;
+}
+
+interface Props {
+  onEdit: (id: string) => void;
+  onOpenStore?: () => void;
+}
+
+const normalizeWorkflowChannel = (ch?: string): Channel => {
+  // Legacy 'telegram' → default to 'telegram_user'
+  if (ch === 'telegram') return 'telegram_user' as Channel;
+  return normalizeChannel(ch);
+};
+
+function CreateWorkflowChannelModal({
+  onClose,
+  onSelect,
+}: {
+  onClose: () => void;
+  onSelect: (channel: Channel) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="w-full max-w-xl rounded-2xl border border-border bg-popover shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <div>
+            <h2 className="text-foreground font-semibold">{tr('Chọn kênh cho workflow mới')}</h2>
+            <p className="text-muted-foreground text-sm mt-0.5">{tr('Mỗi workflow hiện được cấu hình theo một kênh riêng để trigger và action đúng loại.')}</p>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <button
+              onClick={() => onSelect('zalo')}
+              className="flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-2 border-input hover:border-blue-500 hover:bg-blue-500/10 bg-card transition-all group"
+            >
+              <div className="w-14 h-14 rounded-full bg-[#2B6AFF]/20 flex items-center justify-center group-hover:bg-[#2B6AFF]/30 transition-colors">
+                <ZaloIcon size={32} />
+              </div>
+              <div className="text-center">
+                <p className="text-foreground font-semibold text-sm">Zalo</p>
+                <p className="text-muted-foreground text-xs mt-0.5">{tr('Tạo workflow cho Zalo')}</p>
+              </div>
+            </button>
+
+            <button
+              onClick={() => onSelect('facebook')}
+              className="flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-2 border-input hover:border-blue-500 hover:bg-blue-500/10 bg-card transition-all group"
+            >
+              <div className="w-14 h-14 rounded-full bg-[#1877F2]/20 flex items-center justify-center group-hover:bg-[#1877F2]/30 transition-colors">
+                <FacebookIcon size={32} />
+              </div>
+              <div className="text-center">
+                <p className="text-foreground font-semibold text-sm">Facebook</p>
+                <p className="text-muted-foreground text-xs mt-0.5">{tr('Tạo workflow cho Facebook')}</p>
+              </div>
+            </button>
+
+            <button
+              onClick={() => onSelect('telegram_user')}
+              className="flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-2 border-input hover:border-cyan-500 hover:bg-cyan-500/10 bg-card transition-all group"
+            >
+              <div className="w-14 h-14 rounded-full bg-[#0088CC]/20 flex items-center justify-center group-hover:bg-[#0088CC]/30 transition-colors">
+                <TelegramIcon size={32} />
+              </div>
+              <div className="text-center">
+                <p className="text-foreground font-semibold text-sm">{tr('Telegram (Cá nhân)')}</p>
+                <p className="text-muted-foreground text-xs mt-0.5">{tr('MTProto — tài khoản cá nhân')}</p>
+              </div>
+            </button>
+
+            <button
+              onClick={() => onSelect('telegram_bot')}
+              className="flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-2 border-input hover:border-cyan-500 hover:bg-cyan-500/10 bg-card transition-all group"
+            >
+              <div className="w-14 h-14 rounded-full bg-[#0088CC]/20 flex items-center justify-center group-hover:bg-[#0088CC]/30 transition-colors">
+                <TelegramIcon size={32} />
+              </div>
+              <div className="text-center">
+                <p className="text-foreground font-semibold text-sm">Telegram (Bot)</p>
+                <p className="text-muted-foreground text-xs mt-0.5">{tr('Bot API — tài khoản bot')}</p>
+              </div>
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Multi-select page filter dropdown ────────────────────────────────────────
+function PageFilterButton({
+  accounts,
+  filterPages,
+  onChange,
+}: {
+  accounts: PageAccount[];
+  filterPages: string[];
+  onChange: (pages: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const toggle = (id: string) => {
+    onChange(filterPages.includes(id) ? filterPages.filter(p => p !== id) : [...filterPages, id]);
+  };
+
+  const label =
+    filterPages.length === 0
+      ? tr('Tất cả tài khoản')
+      : filterPages.length === 1
+        ? accounts.find(a => a.zalo_id === filterPages[0])?.full_name || filterPages[0]
+        : tr('{{count}} tài khoản', { count: filterPages.length });
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors border ${
+          filterPages.length > 0
+            ? 'bg-blue-600/20 border-blue-500/50 text-blue-300 hover:bg-blue-600/30'
+            : 'bg-card border-border text-foreground/80 hover:border-input hover:text-foreground'
+        }`}
+      >
+        {/* show avatar of selected account when exactly 1 */}
+        {filterPages.length === 1 && (() => {
+          const acc = accounts.find(a => a.zalo_id === filterPages[0]);
+          return acc?.avatar_url
+            ? <img src={acc.avatar_url} className="w-4 h-4 rounded-full object-cover flex-shrink-0" alt="" />
+            : <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 text-[9px] text-white font-bold">
+                {(acc?.full_name || filterPages[0]).charAt(0).toUpperCase()}
+              </div>;
+        })()}
+        {filterPages.length !== 1 && (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+        )}
+        <span className="max-w-[140px] truncate">{label}</span>
+        {filterPages.length > 0 && (
+          <span className="bg-blue-500 text-white text-[11px] px-1.5 py-0.5 rounded-full flex-shrink-0">
+            {filterPages.length}
+          </span>
+        )}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+          className={`flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}>
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1.5 w-[270px] bg-popover border border-border rounded-xl shadow-2xl z-50 overflow-hidden">
+          {/* Dropdown header */}
+          <div className="px-3 py-2 border-b border-border flex items-center justify-between">
+            <span className="text-muted-foreground text-[11px] font-medium">{tr('Lọc theo tài khoản')}</span>
+            {filterPages.length > 0 && (
+              <button onClick={() => onChange([])} className="text-blue-400 text-[11px] hover:text-blue-300 transition-colors">
+                {tr('Xóa lọc')}
+              </button>
+            )}
+          </div>
+
+          {/* "Tất cả" (All) option */}
+          <label className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer transition-colors hover:bg-card/70 ${filterPages.length === 0 ? 'bg-card/40' : ''}`}>
+            <input type="checkbox" checked={filterPages.length === 0} onChange={() => onChange([])} className="accent-blue-500 w-3.5 h-3.5" />
+            <span className="text-foreground text-xs font-medium">{tr('Tất cả tài khoản')}</span>
+          </label>
+
+          <div className="h-px bg-card mx-3" />
+
+          {/* Per-account options */}
+          <div className="max-h-[240px] overflow-y-auto">
+            {accounts.map(acc => {
+              const selected = filterPages.includes(acc.zalo_id);
+              return (
+                <label key={acc.zalo_id}
+                  className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer transition-colors hover:bg-card/70 ${selected ? 'bg-card/40' : ''}`}>
+                  <input type="checkbox" checked={selected} onChange={() => toggle(acc.zalo_id)} className="accent-blue-500 w-3.5 h-3.5 flex-shrink-0" />
+                  {acc.avatar_url
+                    ? <img src={acc.avatar_url} className="w-6 h-6 rounded-full object-cover flex-shrink-0" alt="" />
+                    : <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 text-[11px] text-white font-bold">
+                        {(acc.full_name || acc.zalo_id).charAt(0).toUpperCase()}
+                      </div>
+                  }
+                  <div className="min-w-0 flex-1">
+                    <p className="text-foreground text-xs font-medium truncate">{acc.full_name || acc.zalo_id}</p>
+                    {acc.phone && <p className="text-muted-foreground text-[11px]">{acc.phone}</p>}
+                    <p className="text-muted-foreground text-[11px]">{acc.zalo_id}</p>
+                  </div>
+                  {selected && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-blue-400 flex-shrink-0">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Clone-to-page modal ───────────────────────────────────────────────────────
+function CloneModal({ workflow, accounts, onClose, onDone }: {
+  workflow: any;
+  accounts: PageAccount[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { showNotification } = useAppStore();
+  const [targetId, setTargetId] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const sourceIds: string[] = Array.isArray(workflow.pageIds) ? workflow.pageIds : (workflow.pageId ? [workflow.pageId] : []);
+  const available = accounts.filter(a => !sourceIds.includes(a.zalo_id));
+
+  const handleClone = async () => {
+    if (!targetId) return;
+    setLoading(true);
+    try {
+      const res = await ipc.workflow?.clone(workflow.id, targetId);
+      if (res?.success) {
+        showNotification(tr('Đã nhân bản workflow sang tài khoản mới'), 'success');
+        onDone();
+        onClose();
+      } else {
+        showNotification(res?.error || tr('Lỗi nhân bản'), 'error');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-popover border border-border rounded-2xl shadow-2xl w-[380px] overflow-hidden">
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <div>
+            <p className="text-foreground font-semibold text-sm">{tr('Nhân bản workflow')}</p>
+            <p className="text-muted-foreground text-[11px] mt-0.5 truncate">"{workflow.name}"</p>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <p className="text-muted-foreground text-xs leading-relaxed">
+            {tr('Chọn tài khoản đích để sao chép workflow. Tất cả nodes, edges và cấu hình sẽ được copy - chỉ tài khoản áp dụng thay đổi.')}
+          </p>
+          {available.length === 0 ? (
+            <div className="bg-card border border-border rounded-xl px-4 py-5 text-center">
+              <p className="text-muted-foreground text-xs">{tr('Không có tài khoản nào khác để nhân bản vào.')}</p>
+              <p className="text-muted-foreground text-[11px] mt-1">{tr('Đăng nhập thêm tài khoản Zalo để dùng tính năng này.')}</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {available.map(acc => (
+                <label key={acc.zalo_id}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-colors ${
+                    targetId === acc.zalo_id ? 'bg-blue-500/10 border-blue-500/50' : 'bg-card/50 border-border/60 hover:border-input'
+                  }`}>
+                  <input type="radio" name="cloneTarget" value={acc.zalo_id}
+                    checked={targetId === acc.zalo_id} onChange={() => setTargetId(acc.zalo_id)}
+                    className="accent-blue-500" />
+                  {acc.avatar_url
+                    ? <img src={acc.avatar_url} className="w-7 h-7 rounded-full object-cover flex-shrink-0" alt="" />
+                    : <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 text-xs text-white font-bold">
+                        {(acc.full_name || acc.zalo_id).charAt(0).toUpperCase()}
+                      </div>
+                  }
+                  <div className="min-w-0 flex-1">
+                    <p className="text-foreground text-xs font-medium truncate">{acc.full_name || acc.zalo_id}</p>
+                    {acc.phone && <p className="text-muted-foreground text-[11px]">{acc.phone}</p>}
+                    <p className="text-muted-foreground text-[11px]">{acc.zalo_id}</p>
+                  </div>
+                  {targetId === acc.zalo_id && (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-blue-400 flex-shrink-0">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        {available.length > 0 && (
+          <div className="px-5 pb-5 flex gap-2">
+            <button onClick={onClose} className="flex-1 px-4 py-2 bg-card hover:bg-muted text-foreground/80 text-sm font-medium rounded-xl transition-colors">
+              {tr('Hủy')}
+            </button>
+            <button onClick={handleClone} disabled={!targetId || loading}
+              className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium rounded-xl transition-colors flex items-center justify-center gap-2">
+              {loading && <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+              {tr('Nhân bản')}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Clone-ALL modal ───────────────────────────────────────────────────────────
+function CloneAllModal({ sourceZaloId, accounts, onClose, onDone }: {
+  sourceZaloId: string;
+  accounts: PageAccount[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { showNotification } = useAppStore();
+  const [targetId, setTargetId] = useState('');
+  const [loading, setLoading] = useState(false);
+  const sourceAcc = accounts.find(a => a.zalo_id === sourceZaloId);
+  const available = accounts.filter(a => a.zalo_id !== sourceZaloId);
+
+  const handleCloneAll = async () => {
+    if (!targetId) return;
+    setLoading(true);
+    try {
+      const res = await ipc.workflow?.cloneAll(sourceZaloId, targetId);
+      if (res?.success) {
+        showNotification(tr('Đã nhân bản {{count}} workflow sang tài khoản mới', { count: res.count }), 'success');
+        onDone();
+        onClose();
+      } else {
+        showNotification(res?.error || tr('Lỗi nhân bản'), 'error');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-popover border border-border rounded-2xl shadow-2xl w-[400px] overflow-hidden">
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <div>
+            <p className="text-foreground font-semibold text-sm">{tr('Nhân bản tất cả workflows')}</p>
+            <p className="text-muted-foreground text-[11px] mt-0.5 flex items-center gap-1.5">
+              <span>{tr('Từ:')}</span>
+              {sourceAcc?.avatar_url && <img src={sourceAcc.avatar_url} className="w-4 h-4 rounded-full object-cover" alt="" />}
+              <span className="text-blue-400">{sourceAcc?.full_name || sourceZaloId}</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3">
+            <p className="text-amber-300 text-xs leading-relaxed">
+              {tr('⚠ Tất cả workflows của tài khoản nguồn sẽ được sao chép sang tài khoản đích. Các workflows đã tồn tại ở tài khoản đích sẽ không bị thay thế.')}
+            </p>
+          </div>
+          {available.length === 0 ? (
+            <div className="bg-card border border-border rounded-xl px-4 py-5 text-center">
+              <p className="text-muted-foreground text-xs">{tr('Không có tài khoản nào khác để nhân bản vào.')}</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-muted-foreground text-xs font-medium">{tr('Chọn tài khoản đích:')}</p>
+              {available.map(acc => (
+                <label key={acc.zalo_id}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-colors ${
+                    targetId === acc.zalo_id ? 'bg-blue-500/10 border-blue-500/50' : 'bg-card/50 border-border/60 hover:border-input'
+                  }`}>
+                  <input type="radio" name="cloneAllTarget" value={acc.zalo_id}
+                    checked={targetId === acc.zalo_id} onChange={() => setTargetId(acc.zalo_id)}
+                    className="accent-blue-500" />
+                  {acc.avatar_url
+                    ? <img src={acc.avatar_url} className="w-7 h-7 rounded-full object-cover flex-shrink-0" alt="" />
+                    : <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 text-xs text-white font-bold">
+                        {(acc.full_name || acc.zalo_id).charAt(0).toUpperCase()}
+                      </div>
+                  }
+                  <div className="min-w-0 flex-1">
+                    <p className="text-foreground text-xs font-medium truncate">{acc.full_name || acc.zalo_id}</p>
+                    {acc.phone && <p className="text-muted-foreground text-[11px]">{acc.phone}</p>}
+                    <p className="text-muted-foreground text-[11px]">{acc.zalo_id}</p>
+                  </div>
+                  {targetId === acc.zalo_id && (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-blue-400 flex-shrink-0">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        {available.length > 0 && (
+          <div className="px-5 pb-5 flex gap-2">
+            <button onClick={onClose} className="flex-1 px-4 py-2 bg-card hover:bg-muted text-foreground/80 text-sm font-medium rounded-xl transition-colors">
+              {tr('Hủy')}
+            </button>
+            <button onClick={handleCloneAll} disabled={!targetId || loading}
+              className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium rounded-xl transition-colors flex items-center justify-center gap-2">
+              {loading && <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+              {tr('Nhân bản tất cả')}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Test-run modal (ported from WorkflowEditor) ──────────────────────────────
+function TestRunModal({ accounts, workflowPageIds, triggerType, onRun, onClose }: {
+  accounts: PageAccount[];
+  workflowPageIds: string[];
+  triggerType?: string;
+  onRun: (triggerData: any) => void;
+  onClose: () => void;
+}) {
+  const isFriendRequest = triggerType === 'trigger.friendRequest';
+  const [selectedAccount, setSelectedAccount] = useState('');
+  const [friends, setFriends] = useState<{ userId: string; displayName: string; avatar: string }[]>([]);
+  const [loadingFriends, setLoadingFriends] = useState(false);
+  const [selectedFriend, setSelectedFriend] = useState<{ userId: string; displayName: string } | null>(null);
+  const [search, setSearch] = useState('');
+  const [testContent, setTestContent] = useState(tr('Xin chào, đây là tin nhắn thử nghiệm từ workflow'));
+
+  const availableAccounts = workflowPageIds.length > 0
+    ? accounts.filter(a => workflowPageIds.includes(a.zalo_id))
+    : accounts;
+
+  useEffect(() => {
+    if (availableAccounts.length > 0 && !selectedAccount) {
+      setSelectedAccount(availableAccounts[0].zalo_id);
+    }
+  }, [availableAccounts]);
+
+  useEffect(() => {
+    if (!selectedAccount) return;
+    setLoadingFriends(true);
+    setSelectedFriend(null);
+    // DataAccessor: in employee mode, the workflow list is read from the Boss (IPC returns an empty stub → the list is always empty)
+    DataAccessor.getFriends({ zaloId: selectedAccount }).then((res: any) => {
+      if (res?.success) {
+        const list = (res.friends || []).filter((f: any) => f.userId !== selectedAccount);
+        setFriends(list);
+      }
+    }).catch(() => {}).finally(() => setLoadingFriends(false));
+  }, [selectedAccount]);
+
+  const filteredFriends = search.trim()
+    ? friends.filter(f => f.displayName?.toLowerCase().includes(search.toLowerCase()) || f.userId?.includes(search))
+    : friends;
+
+  const handleRun = () => {
+    if (!selectedFriend || !selectedAccount) return;
+    if (isFriendRequest) {
+      onRun({
+        userId: selectedFriend.userId,
+        displayName: selectedFriend.displayName,
+        phone: '',
+        message: '',
+        zaloId: selectedAccount,
+      });
+    } else {
+      onRun({
+        zaloId: selectedAccount,
+        threadId: selectedFriend.userId,
+        threadType: 0,
+        fromId: selectedFriend.userId,
+        fromName: selectedFriend.displayName,
+        content: testContent,
+        isGroup: false,
+        isSelf: false,
+        timestamp: Date.now(),
+      });
+    }
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-popover border border-border rounded-2xl shadow-2xl w-[440px] max-h-[85vh] flex flex-col overflow-hidden">
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between flex-shrink-0">
+          <div>
+            <p className="text-foreground font-semibold text-sm flex items-center gap-2">{trx('<0/> Chạy thử Workflow', { 0: <PlayIcon className="w-4 h-4" /> })}</p>
+            <p className="text-muted-foreground text-[11px] mt-0.5">{isFriendRequest ? tr('Chọn người để mô phỏng lời mời kết bạn') : tr('Chọn người nhận để gửi tin nhắn thử nghiệm')}</p>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div className="p-5 space-y-4 overflow-y-auto flex-1">
+          {availableAccounts.length > 1 && (
+            <div>
+              <label className="text-muted-foreground text-xs font-medium mb-1.5 block">{tr('Tài khoản gửi')}</label>
+              <div className="space-y-1.5">
+                {availableAccounts.map(acc => (
+                  <button key={acc.zalo_id} type="button"
+                    onClick={() => setSelectedAccount(acc.zalo_id)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl border text-left transition-all ${
+                      selectedAccount === acc.zalo_id
+                        ? 'bg-blue-600/20 border-blue-500/60 ring-1 ring-blue-500/30'
+                        : 'bg-card/60 border-border/50 hover:border-input'
+                    }`}>
+                    {acc.avatar_url
+                      ? <img src={acc.avatar_url} className="w-7 h-7 rounded-full object-cover flex-shrink-0" alt="" />
+                      : <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 text-xs text-white font-bold">
+                          {(acc.full_name || acc.zalo_id).charAt(0).toUpperCase()}
+                        </div>}
+                    <div className="min-w-0 flex-1">
+                      <p className={`text-sm font-medium truncate ${selectedAccount === acc.zalo_id ? 'text-blue-300' : 'text-foreground'}`}>
+                        {acc.full_name || acc.zalo_id}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {!isFriendRequest && (
+          <div>
+            <label className="text-muted-foreground text-xs font-medium mb-1.5 block">{tr('Nội dung tin nhắn thử ($trigger.content)')}</label>
+            <textarea
+              value={testContent}
+              onChange={e => setTestContent(e.target.value)}
+              className="w-full bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder-subtle-foreground focus:border-blue-500 outline-none resize-none"
+              rows={2}
+              placeholder={tr('Nhập tin nhắn thử nghiệm...')}
+            />
+          </div>
+          )}
+          <div>
+            <label className="text-muted-foreground text-xs font-medium mb-1.5 block">
+              {isFriendRequest ? tr('Chọn người gửi lời mời kết bạn') : tr('Chọn người nhận')} <span className="text-muted-foreground">{tr('(không thể gửi cho chính mình)')}</span>
+            </label>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder-subtle-foreground focus:border-blue-500 outline-none mb-2"
+              placeholder={tr('Tìm tên hoặc ID...')}
+            />
+            {loadingFriends ? (
+              <div className="flex items-center gap-2 py-4 justify-center text-muted-foreground text-xs">
+                <span className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                {tr('Đang tải danh bạ…')}
+              </div>
+            ) : filteredFriends.length === 0 ? (
+              <div className="py-4 text-center text-muted-foreground text-xs">
+                {friends.length === 0 ? tr('Chưa có bạn bè nào') : tr('Không tìm thấy')}
+              </div>
+            ) : (
+              <div className="max-h-[200px] overflow-y-auto space-y-1 pr-1">
+                {filteredFriends.slice(0, 50).map(f => {
+                  const isActive = selectedFriend?.userId === f.userId;
+                  return (
+                    <button key={f.userId} type="button"
+                      onClick={() => setSelectedFriend(isActive ? null : f)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border text-left transition-all ${
+                        isActive
+                          ? 'bg-green-600/20 border-green-500/60 ring-1 ring-green-500/30'
+                          : 'bg-card/40 border-border/40 hover:border-input'
+                      }`}>
+                      {f.avatar
+                        ? <img src={f.avatar} className="w-7 h-7 rounded-full object-cover flex-shrink-0" alt="" />
+                        : <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center flex-shrink-0 text-[10px] text-muted-foreground font-bold">
+                            {(f.displayName || '?').charAt(0).toUpperCase()}
+                          </div>}
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-sm font-medium truncate ${isActive ? 'text-green-300' : 'text-foreground'}`}>
+                          {f.displayName || f.userId}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground truncate">{f.userId}</p>
+                      </div>
+                      {isActive && (
+                        <svg className="w-5 h-5 text-green-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="px-5 py-4 border-t border-border flex gap-2 flex-shrink-0">
+          <button onClick={onClose} className="flex-1 px-4 py-2.5 bg-card hover:bg-muted text-foreground/80 text-sm font-medium rounded-xl transition-colors">
+            {tr('Hủy')}
+          </button>
+          <button onClick={handleRun} disabled={!selectedFriend || !selectedAccount}
+            className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-500 disabled:opacity-40 text-white text-sm font-medium rounded-xl transition-colors flex items-center justify-center gap-2">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            {tr('Chạy thử')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Channel filter dropdown ─────────────────────────────────────────────────────
+function ChannelFilterButton({ value, onChange }: {
+  value: 'all' | Channel;
+  onChange: (v: 'all' | Channel) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const options: { key: 'all' | Channel; label: string }[] = [
+    { key: 'all', label: tr('Tất cả kênh') },
+    { key: CHANNEL.ZALO, label: 'Zalo' },
+    { key: CHANNEL.FACEBOOK, label: 'Facebook' },
+    { key: CHANNEL.TELEGRAM_USER, label: tr('Telegram (Cá nhân)') },
+    { key: CHANNEL.TELEGRAM_BOT, label: 'Telegram (Bot)' },
+  ];
+
+  const selectedLabel = options.find(o => o.key === value)?.label || tr('Tất cả kênh');
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors border ${
+          value !== 'all'
+            ? 'bg-blue-600/20 border-blue-500/50 text-blue-300 hover:bg-blue-600/30'
+            : 'bg-card border-border text-foreground/80 hover:border-input hover:text-foreground'
+        }`}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/>
+        </svg>
+        <span className="max-w-[120px] truncate">{selectedLabel}</span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+          className={`flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}>
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1.5 w-[180px] bg-popover border border-border rounded-xl shadow-2xl z-50 overflow-hidden">
+          {options.map(opt => (
+            <button
+              key={opt.key}
+              onClick={() => { onChange(opt.key); setOpen(false); }}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-card/70 ${
+                value === opt.key ? 'bg-card/40 text-foreground' : 'text-muted-foreground'
+              }`}
+            >
+              {opt.key === CHANNEL.ZALO && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />}
+              {opt.key === CHANNEL.FACEBOOK && <span className="w-2 h-2 rounded-full bg-[#1877F2] flex-shrink-0" />}
+              {opt.key === 'all' && (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                </svg>
+              )}
+              <span className="text-xs font-medium">{opt.label}</span>
+              {value === opt.key && (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-auto text-blue-400">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+export default function WorkflowList({ onEdit, onOpenStore }: Props) {
+  const { showNotification } = useAppStore();
+  const isEmployeeMode = useEmployeeStore(s => s.mode === 'employee');
+  const [workflows, setWorkflows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [accounts, setAccounts] = useState<PageAccount[]>([]);
+  const [cloningWf, setCloningWf] = useState<any | null>(null);
+  const [cloneAllSource, setCloneAllSource] = useState<string | null>(null);
+  const [filterPages, setFilterPages] = useState<string[]>([]);  // empty = all
+  const [searchQuery, setSearchQuery] = useState('');
+  const [channelFilter, setChannelFilter] = useState<'all' | Channel>('all');
+  const [runningId, setRunningId] = useState<string | null>(null);
+  const [testRunWf, setTestRunWf] = useState<any | null>(null);
+  const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      if (isEmployeeMode) {
+        const res = await DataAccessor.getWorkflows();
+        if (res?.success) setWorkflows(res.workflows || []);
+      } else {
+        const res = await ipc.workflow?.list();
+        if (res?.success) setWorkflows(res.workflows);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    if (isEmployeeMode) {
+      // Employee: accounts from accountStore (already loaded by workspace:initialState)
+      const accs = useAccountStore.getState().accounts;
+      if (accs.length > 0) {
+        setAccounts(accs.map((a: any) => ({
+          zalo_id: a.zalo_id,
+          full_name: a.full_name || '',
+          avatar_url: a.avatar_url || '',
+          phone: a.phone || '',
+          channel: a.channel || CHANNEL.ZALO,
+        })));
+      }
+      // Subscribe to account changes
+      const unsub = useAccountStore.subscribe((state) => {
+        const updated = state.accounts;
+        if (updated.length > 0) {
+          setAccounts(updated.map((a: any) => ({
+            zalo_id: a.zalo_id,
+            full_name: a.full_name || '',
+            avatar_url: a.avatar_url || '',
+            phone: a.phone || '',
+            channel: a.channel || CHANNEL.ZALO,
+          })));
+        }
+      });
+      return () => unsub();
+    } else {
+      ipc.login?.getAccounts().then((res: any) => {
+        if (res?.success) setAccounts((res.accounts || [])
+          .map((a: any) => ({
+          zalo_id: a.zalo_id,
+          full_name: a.full_name || '',
+          avatar_url: a.avatar_url || '',
+          phone: a.phone || '',
+          channel: a.channel || CHANNEL.ZALO,
+        })));
+      }).catch(() => {});
+    }
+  }, [isEmployeeMode]);
+
+  // A workflow changed on another machine (saved, deleted, toggled or duplicated by the Boss or another employee; workflow:changed relay event) → load
+  // the list again; bursts of events (bulk duplicating) are merged into one load.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsub = ipc.on?.('workflow:changed', () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { timer = null; void load(); }, 300);
+    });
+    return () => { if (timer) clearTimeout(timer); unsub?.(); };
+  }, [isEmployeeMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const createNew = async (channel: Channel) => {
+    const id = uuidv4();
+    const wfData = {
+      channel,
+      id, name: tr('Workflow mới'), description: '', enabled: false,
+      nodes: [], edges: [], createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    const res = isEmployeeMode
+      ? await DataAccessor.saveWorkflow(wfData)
+      : await ipc.workflow?.save(wfData);
+    if (res?.success) {
+      setShowCreateChannelModal(false);
+      onEdit(id);
+    }
+    else showNotification(tr('Lỗi tạo workflow'), 'error');
+  };
+
+  const handleToggle = async (id: string, enabled: boolean) => {
+    const res = isEmployeeMode
+      ? await DataAccessor.toggleWorkflow(id, enabled)
+      : await ipc.workflow?.toggle(id, enabled);
+    if (res?.success) {
+      setWorkflows(ws => ws.map(w => w.id === id ? { ...w, enabled } : w));
+      return;
+    }
+    showNotification(res?.error || tr('Không thể cập nhật trạng thái workflow'), 'error');
+  };
+
+  const handleDelete = async (id: string, name: string) => {
+    const ok = await showConfirm({
+      title: tr('Xóa workflow "{{name}}"?', { name }),
+      message: tr('Tất cả lịch sử chạy cũng sẽ bị xóa. Hành động này không thể hoàn tác.'),
+      confirmText: tr('Xóa'), cancelText: tr('Hủy'), variant: 'danger',
+    });
+    if (!ok) return;
+    const res = isEmployeeMode
+      ? await DataAccessor.deleteWorkflow(id)
+      : await ipc.workflow?.delete(id);
+    if (res?.success) {
+      setWorkflows(ws => ws.filter(w => w.id !== id));
+      showNotification(tr('Đã xóa workflow'), 'success');
+    } else {
+      showNotification(res?.error || tr('Lỗi xóa workflow'), 'error');
+    }
+  };
+
+  const handleRunClick = (wf: any) => {
+    const triggerNode = (wf.nodes || []).find((n: any) => (n.type || '').startsWith('trigger.'));
+    const triggerType = triggerNode?.type || '';
+    const hasSendNodes = (wf.nodes || []).some((n: any) => {
+      const t = n.type || '';
+      return t === 'zalo.sendMessage' || t === 'zalo.sendImage' || t === 'zalo.sendFile'
+        || t === 'zalo.sendVoice' || t === 'zalo.sendTyping';
+    });
+    if (hasSendNodes || triggerType === 'trigger.friendRequest') {
+      setTestRunWf({ ...wf, _triggerType: triggerType });
+    } else {
+      handleRun(wf.id);
+    }
+  };
+
+  const handleRun = async (id: string, triggerData?: any) => {
+    setRunningId(id);
+    try {
+      const res = await ipc.workflow?.runManual(id, triggerData);
+      if (res?.success) showNotification(tr('Chạy xong - {{status}}', { status: res.log?.status }), 'success');
+      else showNotification(res?.error || tr('Lỗi chạy workflow'), 'error');
+    } finally {
+      setRunningId(null);
+    }
+  };
+
+  const handleExport = (wf: any) => {
+    const exportData = {
+      _deplaoWorkflow: true,
+      _version: 1,
+      _exportedAt: new Date().toISOString(),
+      channel: normalizeWorkflowChannel(wf.channel),
+      name: wf.name,
+      description: wf.description || '',
+      nodes: wf.nodes || [],
+      edges: wf.edges || [],
+    };
+    const json = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `workflow-${(wf.name || 'export').replace(/[^a-zA-Z0-9_\-\u00C0-\u024F\u1E00-\u1EFF]/g, '_').substring(0, 50)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showNotification(tr('Đã xuất workflow thành file JSON'), 'success');
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string);
+        if (!data._deplaoWorkflow) {
+          showNotification(tr('File không phải workflow Deplao hợp lệ'), 'error');
+          return;
+        }
+        // Old file without a channel → defaults to Zalo
+        const importChannel = normalizeWorkflowChannel(data.channel);
+        // Create new IDs for all nodes/edges
+        const idMap: Record<string, string> = {};
+        const importedNodes = (data.nodes || []).map((n: any) => {
+          const newId = uuidv4();
+          idMap[n.id] = newId;
+          return { ...n, id: newId };
+        });
+        const importedEdges = (data.edges || []).map((edge: any) => ({
+          ...edge,
+          id: uuidv4(),
+          source: idMap[edge.source] || edge.source,
+          target: idMap[edge.target] || edge.target,
+        }));
+
+        const newId = uuidv4();
+        const importWf = {
+          channel: importChannel,
+          id: newId,
+          name: data.name ? tr('{{name}} (nhập)', { name: data.name }) : tr('Workflow nhập'),
+          description: data.description || '',
+          enabled: false,
+          nodes: importedNodes,
+          edges: importedEdges,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        const res = isEmployeeMode
+          ? await DataAccessor.saveWorkflow(importWf)
+          : await ipc.workflow?.save(importWf);
+
+        if (res?.success) {
+          showNotification(tr('Đã nhập workflow "{{v1}}"', { v1: data.name || 'Imported' }), 'success');
+          load();
+        } else {
+          showNotification(res?.error || tr('Lỗi nhập workflow'), 'error');
+        }
+      } catch (err: any) {
+        showNotification(tr('Lỗi đọc file JSON: {{v1}}', { v1: (err.message || 'Invalid JSON') }), 'error');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  /** Filter by selected pages, channel, and search query */
+  const filteredWorkflows = (() => {
+    let result = workflows;
+    // Filter by channel
+    if (channelFilter !== 'all') {
+      result = result.filter(wf => {
+        const wfCh = normalizeWorkflowChannel(wf.channel);
+        if (wfCh === channelFilter) return true;
+        // Telegram: show both telegram_user and telegram_bot when either is selected
+        const isTelegramFilter = channelFilter === CHANNEL.TELEGRAM_USER || channelFilter === CHANNEL.TELEGRAM_BOT;
+        const isTelegramWf = wfCh === CHANNEL.TELEGRAM_USER || wfCh === CHANNEL.TELEGRAM_BOT;
+        if (isTelegramFilter && isTelegramWf) return true;
+        return false;
+      });
+    }
+    // Filter by pages
+    if (filterPages.length > 0) {
+      result = result.filter(wf => {
+        const ids: string[] = Array.isArray(wf.pageIds) && wf.pageIds.length > 0
+          ? wf.pageIds
+          : (wf.pageId ? [wf.pageId] : []);
+        if (ids.length === 0) return true;  // global workflows always shown
+        return filterPages.some(fp => ids.includes(fp));
+      });
+    }
+    // Filter by search query
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      result = result.filter(wf =>
+        (wf.name || '').toLowerCase().includes(q)
+        || (wf.description || '').toLowerCase().includes(q)
+      );
+    }
+    return result;
+  })();
+
+  const triggerTypeLabel: Record<string, string> = {
+    'trigger.message':       tr('Tin nhắn'),
+    'trigger.friendRequest': tr('Kết bạn'),
+    'trigger.groupEvent':    tr('Sự kiện nhóm'),
+    'trigger.reaction':      tr('Cảm xúc'),
+    'trigger.labelAssigned': tr('Gán nhãn'),
+    'trigger.schedule':      tr('Lịch trình'),
+    'trigger.manual':        tr('Thủ công'),
+  };
+
+  const getTriggerLabel = (wf: any) => {
+    const trigger = (wf.nodes || []).find((n: any) => n.type?.startsWith('trigger.'));
+    return trigger ? (triggerTypeLabel[trigger.type] || trigger.type) : '-';
+  };
+
+  /** Page badges shown in each workflow card's meta row */
+  const renderPageBadges = (wf: any) => {
+    const ids: string[] = Array.isArray(wf.pageIds) && wf.pageIds.length > 0
+      ? wf.pageIds
+      : (wf.pageId ? [wf.pageId] : []);
+    if (ids.length === 0) {
+      return <span className="text-muted-foreground text-[11px]">{trx('<0/> Tất cả tài khoản', { 0: <SmartphoneIcon className="w-4 h-4 inline" /> })}</span>;
+    }
+    if (ids.length === 1) {
+      const acc = accounts.find(a => a.zalo_id === ids[0]);
+      return (
+        <span className="flex items-center gap-1 text-muted-foreground text-[11px]">
+          {acc?.avatar_url
+            ? <img src={acc.avatar_url} className="w-3.5 h-3.5 rounded-full object-cover flex-shrink-0" alt="" />
+            : <span><SmartphoneIcon className="w-4 h-4" /></span>
+          }
+          <span className="truncate max-w-[120px]">{acc?.full_name || ids[0]}</span>
+        </span>
+      );
+    }
+    const names = ids.map(id => accounts.find(a => a.zalo_id === id)?.full_name || id);
+    return (
+      <span className="flex items-center gap-1 text-muted-foreground text-[11px]" title={names.join(', ')}>
+        <span><SmartphoneIcon className="w-4 h-4" /></span>
+        <span>{trx('{{count}} tài khoản', { count: ids.length })}</span>
+      </span>
+    );
+  };
+
+  const renderChannelBadge = (wf: any) => {
+    const channel = normalizeWorkflowChannel(wf.channel);
+    const color = getChannelColor(channel as Channel);
+    const label = getChannelLabel(channel as Channel);
+    return (
+      <span className={`inline-flex items-center text-[11px] px-2 py-0.5 rounded-full border`}
+        style={{ backgroundColor: `${color}15`, borderColor: `${color}4D`, color }}
+      >
+        {label}
+      </span>
+    );
+  };
+
+  if (loading) return <PageLoading text={tr('Đang tải workflow...')} />;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="px-6 py-5 border-b border-border flex-shrink-0">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-foreground text-xl font-bold flex items-center gap-2">
+              {trx('<0/> WorkFlow Automation', { 0: <LightningIcon className="w-5 h-5" /> })}
+            </h1>
+            <p className="text-muted-foreground text-sm mt-0.5">{tr('Tự động hoá công việc với Workflow Automation')}</p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Clone-all - only available when exactly 1 account is filtered */}
+            {filterPages.length === 1 && (
+                <button
+                    onClick={() => setCloneAllSource(filterPages[0])}
+                    className="flex items-center gap-1.5 px-3.5 py-2.5 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/30 text-amber-400 text-sm font-medium rounded-xl whitespace-nowrap transition-colors"
+                    title={tr('Nhân bản tất cả workflows của tài khoản này sang tài khoản khác')}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                  {tr('Clone tất cả')}
+                </button>
+            )}
+
+            {onOpenStore && (
+              <button
+                onClick={onOpenStore}
+                className="flex items-center gap-2 px-4 py-2.5 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/40 text-violet-300 text-sm font-medium rounded-xl transition-colors"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+                </svg>
+                {tr('Kho mẫu 🔥')}
+              </button>
+            )}
+            <button
+              onClick={() => importFileRef.current?.click()}
+              className="flex items-center gap-2 px-4 py-2.5 bg-card hover:bg-muted border border-border text-foreground/80 text-sm font-medium rounded-xl transition-colors"
+              title={tr('Nhập workflow từ file JSON')}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              {tr('Nhập JSON')}
+            </button>
+            <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
+            <button
+              onClick={() => setShowCreateChannelModal(true)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              {tr('Tạo workflow')}
+            </button>
+          </div>
+        </div>
+
+        {/* Search bar & filters & stats */}
+        {workflows.length > 0 && (
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1 max-w-md">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder={tr('Tìm workflow theo tên hoặc mô tả...')}
+                className="w-full bg-card border border-border rounded-xl pl-10 pr-4 py-2.5 text-sm text-foreground placeholder-subtle-foreground focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 outline-none transition-all"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground/80 transition-colors">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              )}
+            </div>
+
+            {/* Multi-select page filter - only when accounts exist */}
+            {accounts.length > 0 && (
+              <PageFilterButton accounts={accounts} filterPages={filterPages} onChange={setFilterPages} />
+            )}
+
+            {/* Channel filter */}
+            <ChannelFilterButton value={channelFilter} onChange={setChannelFilter} />
+
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-green-500" />
+                {workflows.filter(w => w.enabled).length} {tr('đang bật')}
+              </span>
+              <span className="text-gray-700">·</span>
+              <span>{trx('{{count}} tổng cộng', { count: workflows.length })}</span>
+              {filteredWorkflows.length !== workflows.length && (
+                <>
+                  <span className="text-gray-700">·</span>
+                  <span className="text-blue-400">{trx('{{count}} kết quả', { count: filteredWorkflows.length })}</span>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {loading && (
+          <div className="flex items-center justify-center py-16">
+            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+
+        {!loading && workflows.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-card border border-border flex items-center justify-center mb-4">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-muted-foreground">
+                <circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/>
+                <circle cx="12" cy="18" r="2"/>
+                <path d="M7 6h10M5 8v4a7 7 0 0 0 7 7M19 8v4a7 7 0 0 1-7 7"/>
+              </svg>
+            </div>
+            <button onClick={() => setShowCreateChannelModal(true)}
+              className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition-colors">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              {tr('Tạo workflow đầu tiên')}
+            </button>
+            {onOpenStore && (
+              <button onClick={onOpenStore}
+                className="flex items-center gap-2 px-5 py-2.5 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/40 text-violet-300 text-sm font-medium rounded-xl transition-colors mt-3">
+                {trx('<0><1/></0> Hoặc chọn từ Kho mẫu có sẵn', { 0: <span />, 1: <PackageIcon className="w-4 h-4" /> })}
+              </button>
+            )}
+          </div>
+        )}
+
+        {!loading && workflows.length > 0 && filteredWorkflows.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <p className="text-muted-foreground text-sm">
+              {searchQuery ? tr('Không tìm thấy workflow nào với "{{searchQuery}}"', { searchQuery }) : tr('Không có workflow nào khớp với bộ lọc.')}
+            </p>
+            <button onClick={() => { setFilterPages([]); setSearchQuery(''); }} className="mt-3 text-blue-400 text-xs hover:text-blue-300 transition-colors">
+              {tr('Xóa bộ lọc')}
+            </button>
+          </div>
+        )}
+
+        {/* ── Card Grid ──────────────────────────────────────────────── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {filteredWorkflows.map(wf => {
+            const isRunning = runningId === wf.id;
+            return (
+              <div key={wf.id}
+                className="group bg-card rounded-2xl shadow-sm hover:shadow-md transition-shadow flex flex-col overflow-hidden">
+                {/* Card header */}
+                <div className="px-4 pt-4 pb-3 flex items-start gap-3">
+                  {/* Status indicator */}
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                    wf.enabled
+                      ? 'bg-success/15 text-success'
+                      : 'bg-muted text-muted-foreground'
+                  }`}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/>
+                      <circle cx="12" cy="18" r="2"/>
+                      <path d="M7 6h10M5 8v4a7 7 0 0 0 7 7M19 8v4a7 7 0 0 1-7 7"/>
+                    </svg>
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <h3 className="text-foreground font-semibold text-sm truncate flex-1">{wf.name}</h3>
+                      {renderChannelBadge(wf)}
+                      {/* Toggle */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleToggle(wf.id, !wf.enabled); }}
+                        className="flex-shrink-0"
+                        title={wf.enabled ? tr('Đang bật - nhấn để tắt') : tr('Đang tắt - nhấn để bật')}
+                      >
+                        <div className={`w-9 h-[20px] rounded-full transition-colors relative ${wf.enabled ? 'bg-blue-600' : 'bg-muted'}`}>
+                          <span className={`absolute top-[3px] w-[14px] h-[14px] bg-white rounded-full shadow transition-all ${wf.enabled ? 'left-[19px]' : 'left-[3px]'}`} />
+                        </div>
+                      </button>
+                    </div>
+                    {wf.description && (
+                      <p className="text-muted-foreground text-xs line-clamp-2 leading-relaxed">{wf.description}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Card meta */}
+                <div className="px-4 pb-3 flex items-center gap-2 flex-wrap">
+                  <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                    {getTriggerLabel(wf)}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">{trx('{{count}} nodes', { count: (wf.nodes || []).length })}</span>
+                  <span className="text-subtle-foreground">·</span>
+                  {renderPageBadges(wf)}
+                </div>
+
+                {/* Card footer */}
+                <div className="px-4 py-3 border-t border-border/60 flex items-center justify-between mt-auto">
+                  <span className="text-[11px] text-muted-foreground">
+                    {new Date(wf.updatedAt).toLocaleDateString(appLocale(), { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                  </span>
+
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => handleRunClick(wf)} disabled={isRunning} title={tr('Chạy thử')}
+                      className="h-7 px-2.5 rounded-lg flex items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-green-400 hover:bg-green-500/10 disabled:opacity-40 transition-colors">
+                      {isRunning
+                        ? <span className="w-3 h-3 border-2 border-green-500/30 border-t-green-500 rounded-full animate-spin" />
+                        : <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      }
+                      <span className="hidden sm:inline">{tr('Chạy thử')}</span>
+                    </button>
+                    <button onClick={() => handleExport(wf)} title={tr('Xuất JSON')}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                      </svg>
+                    </button>
+                    <button onClick={() => setCloningWf(wf)} title={tr('Nhân bản')}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-amber-400 hover:bg-amber-500/10 transition-colors">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                      </svg>
+                    </button>
+                    <button onClick={() => onEdit(wf.id)} title={tr('Chỉnh sửa')}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                      </svg>
+                    </button>
+                    <button onClick={() => handleDelete(wf.id, wf.name)} title={tr('Xóa')}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                        <path d="M10 11v6M14 11v6"/>
+                        <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Clone single workflow modal */}
+      {cloningWf && (
+        <CloneModal
+          workflow={cloningWf}
+          accounts={accounts}
+          onClose={() => setCloningWf(null)}
+          onDone={load}
+        />
+      )}
+
+      {/* Clone-all modal */}
+      {cloneAllSource && (
+        <CloneAllModal
+          sourceZaloId={cloneAllSource}
+          accounts={accounts}
+          onClose={() => setCloneAllSource(null)}
+          onDone={load}
+        />
+      )}
+
+      {/* Test Run Modal */}
+      {testRunWf && (
+        <TestRunModal
+          accounts={accounts}
+          workflowPageIds={Array.isArray(testRunWf.pageIds) ? testRunWf.pageIds : (testRunWf.pageId ? [testRunWf.pageId] : [])}
+          triggerType={testRunWf._triggerType}
+          onRun={(triggerData) => handleRun(testRunWf.id, triggerData)}
+          onClose={() => setTestRunWf(null)}
+        />
+      )}
+
+      {showCreateChannelModal && (
+        <CreateWorkflowChannelModal
+          onClose={() => setShowCreateChannelModal(false)}
+          onSelect={createNew}
+        />
+      )}
+    </div>
+  );
+}

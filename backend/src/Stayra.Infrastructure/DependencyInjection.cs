@@ -8,6 +8,7 @@ using Stayra.Application.Bookings;
 using Stayra.Application.Common;
 using Stayra.Application.Payments;
 using Stayra.Application.Pricing;
+using Stayra.Domain;
 using Stayra.Infrastructure.Messaging;
 using Stayra.Infrastructure.Payments;
 using Stayra.Infrastructure.Persistence;
@@ -43,12 +44,23 @@ public static class DependencyInjection
             if (string.IsNullOrWhiteSpace(o.WebBaseUrl)) o.WebBaseUrl = config["App:WebBaseUrl"] ?? "http://localhost:5173";
         });
         services.AddScoped<IEmailSender, SmtpEmailSender>();
+        services.Configure<DeplaoOptions>(config.GetSection("Deplao"));
+        services.AddHttpClient<DeplaoClient>();
 
         services.AddSingleton<IBookingConflictDetector, PostgresConflictDetector>();
         services.AddScoped<IJobScheduler, HangfireJobScheduler>();
         services.AddScoped<IGuestMessenger, GuestMessenger>();
         services.AddScoped<IChannelAdapter, WebWidgetAdapter>();
-        services.AddScoped<IChannelAdapter, ZaloAdapter>();
+        foreach (var ch in new[] { ChannelType.Zalo, ChannelType.Facebook, ChannelType.Telegram })
+        {
+            var channel = ch;
+            services.AddScoped<IChannelAdapter>(sp => new DeplaoChannelAdapter(
+                channel,
+                sp.GetRequiredService<ZaloClient>(),
+                sp.GetRequiredService<DeplaoClient>(),
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ZaloOptions>>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DeplaoChannelAdapter>>()));
+        }
 
         services.AddScoped<AuditService>();
         services.AddScoped<PricingService>();
@@ -86,6 +98,7 @@ public static class DependencyInjection
         services.AddSingleton<Concierge.TenantAi>();
         services.AddScoped<Concierge.ConciergeService>();
         services.AddScoped<ZaloWebhookService>();
+        services.AddScoped<DeplaoWebhookService>();
         return services;
     }
 }

@@ -1,0 +1,126 @@
+import { create } from 'zustand';
+import DataAccessor from '@/lib/data/DataAccessor';
+import type { ErpNote, ErpNoteFolder, ErpNoteTag } from '../../../models/erp';
+import { withErpDeniedNotice } from './erpStoreHelpers';
+
+// Notes live in the owner's machine DB: employees read / write via DataAccessor (REST → the owner's machine filters by author / sharing / workspace).
+// Previously an IPC call on the employee machine → the note existed only on that machine, and sharing it reached nobody.
+
+interface ErpNoteState {
+  folders: ErpNoteFolder[];
+  notes: ErpNote[];
+  activeNoteId: string | null;
+  tags: ErpNoteTag[];
+  loading: boolean;
+  lastFilter: any;
+
+  loadFolders: () => Promise<void>;
+  loadNotes: (filter?: any) => Promise<void>;
+  refreshVisible: () => Promise<void>;
+  loadTags: () => Promise<void>;
+  createNote: (input: any) => Promise<ErpNote | null>;
+  updateNote: (id: string, patch: any) => Promise<ErpNote | null>;
+  deleteNote: (id: string) => Promise<void>;
+  setActiveNote: (id: string | null) => void;
+  _onNoteCreated: (note: ErpNote) => void;
+  _onNoteUpdated: (note: ErpNote) => void;
+  _onNoteDeleted: (noteId: string) => void;
+}
+
+export const useErpNoteStore = create<ErpNoteState>((set, get) => ({
+  folders: [],
+  notes: [],
+  activeNoteId: null,
+  tags: [],
+  loading: false,
+  lastFilter: {},
+
+  // Read error → keep the list currently shown (isReadFailure), only turn off loading
+  loadFolders: async () => {
+    const res: any = await DataAccessor.erpNoteFolders();
+    if (res?.success) set({ folders: normalizeFolders(res.folders) });
+  },
+
+  loadNotes: async (filter = {}) => {
+    set({ loading: true, lastFilter: filter });
+    const res: any = await DataAccessor.erpNotes(filter);
+    if (res?.success) set({ notes: normalizeNotes(res.notes), loading: false });
+    else set({ loading: false });
+  },
+
+  refreshVisible: async () => {
+    await Promise.all([
+      get().loadFolders(),
+      get().loadNotes(get().lastFilter || {}),
+    ]);
+  },
+
+  loadTags: async () => {
+    const res: any = await DataAccessor.erpNoteTags();
+    if (res?.success && Array.isArray(res.tags)) set({ tags: res.tags });
+  },
+
+  createNote: async (input) => {
+    const res: any = withErpDeniedNotice(await DataAccessor.erpCreateNote(input));
+    if (res?.success && res.note) {
+      set(s => ({ notes: normalizeNotes([res.note, ...s.notes]) }));
+      return res.note;
+    }
+    return null;
+  },
+
+  updateNote: async (id, patch) => {
+    const res: any = withErpDeniedNotice(await DataAccessor.erpUpdateNote(id, patch));
+    if (res?.success && res.note) {
+      set(s => ({ notes: normalizeNotes(s.notes.map(n => n.id === id ? res.note : n)) }));
+      return res.note;
+    }
+    return null;
+  },
+
+  // Owner's machine refused / connection lost → keep the note in the list
+  deleteNote: async (id) => {
+    const res: any = withErpDeniedNotice(await DataAccessor.erpDeleteNote(id));
+    if (res && res.success === false) return;
+    set(s => ({ notes: s.notes.filter(n => n.id !== id), activeNoteId: s.activeNoteId === id ? null : s.activeNoteId }));
+  },
+
+  setActiveNote: (id) => set({ activeNoteId: id }),
+  _onNoteCreated: (note) => set(s => ({ notes: normalizeNotes([note, ...s.notes]) })),
+  _onNoteUpdated: (note) => set(s => ({ notes: normalizeNotes([note, ...s.notes.filter(item => item.id !== note.id)]) })),
+  _onNoteDeleted: (noteId) => set(s => ({
+    notes: s.notes.filter(note => note.id !== noteId),
+    activeNoteId: s.activeNoteId === noteId ? null : s.activeNoteId,
+  })),
+}));
+
+function normalizeFolders(folders: ErpNoteFolder[] = []): ErpNoteFolder[] {
+  const seen = new Set<number>();
+  const validIds = new Set<number>();
+  for (const folder of folders as any[]) {
+    if (folder && typeof folder.id === 'number' && Number.isFinite(folder.id)) validIds.add(folder.id);
+  }
+  return folders.filter((folder: any): folder is ErpNoteFolder => {
+    if (!folder || typeof folder.id !== 'number' || !Number.isFinite(folder.id)) return false;
+    if (seen.has(folder.id)) return false;
+    seen.add(folder.id);
+    if (folder.parent_id !== null && folder.parent_id !== undefined && !validIds.has(folder.parent_id)) {
+      folder.parent_id = undefined;
+    }
+    return true;
+  });
+}
+
+function normalizeNotes(notes: ErpNote[] = []): ErpNote[] {
+  const seen = new Set<string>();
+  return notes.filter((note: any): note is ErpNote => {
+    if (!note || typeof note.id !== 'string' || !note.id.trim()) return false;
+    if (seen.has(note.id)) return false;
+    seen.add(note.id);
+    if (note.folder_id !== null && note.folder_id !== undefined && (!Number.isFinite(note.folder_id) || note.folder_id <= 0)) {
+      note.folder_id = undefined;
+    }
+    return true;
+  });
+}
+
