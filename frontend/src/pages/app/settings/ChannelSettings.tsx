@@ -44,6 +44,13 @@ interface DeplaoAccount {
   status: string | null
 }
 
+interface DeplaoRecipient {
+  threadId: string
+  displayName: string
+  type: string
+  phone?: string | null
+}
+
 interface ZaloStatus {
   connected: boolean
   configured: boolean
@@ -66,7 +73,8 @@ export default function ChannelSettings() {
   const zalo = useQuery({ queryKey: ["zalo"], queryFn: () => api.get<ZaloStatus>("/api/app/channels/zalo") })
 
   const [dForm, setDForm] = useState({ baseUrl: "", apiKey: "", webhookSecret: "" })
-  const [dTest, setDTest] = useState({ conversationId: "", text: "" })
+  const [dTest, setDTest] = useState({ accountId: "", conversationId: "", text: "", type: "user" })
+  const [recipients, setRecipients] = useState<DeplaoRecipient[]>([])
   const [accounts, setAccounts] = useState<DeplaoAccount[]>([])
   const [qrModalOpen, setQrModalOpen] = useState(false)
   const [qrTempId, setQrTempId] = useState<string | null>(null)
@@ -197,8 +205,29 @@ export default function ChannelSettings() {
     onError: (e) => toast.error(errorMessage(e)),
   })
 
+  const loadRecipients = useMutation({
+    mutationFn: (accountId?: string) => {
+      const targetAcc = accountId || dTest.accountId || connections[0]?.accountId || ""
+      const q = targetAcc ? `?accountId=${encodeURIComponent(targetAcc)}` : ""
+      return api.get<{ ok: boolean; recipients: DeplaoRecipient[]; error?: string }>(`/api/app/channels/deplao/recipients${q}`)
+    },
+    onSuccess: (r) => {
+      if (!r.ok) {
+        toast.error(r.error || "Không tải được danh bạ")
+        return
+      }
+      setRecipients(r.recipients ?? [])
+      if ((r.recipients ?? []).length === 0) toast.info("Chưa có cuộc trò chuyện/danh bạ nào trên tài khoản này.")
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
   const sendTest = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; message: string }>("/api/app/channels/deplao/test", dTest),
+    mutationFn: () =>
+      api.post<{ ok: boolean; message: string }>("/api/app/channels/deplao/test", {
+        ...dTest,
+        accountId: dTest.accountId || connections[0]?.accountId || null,
+      }),
     onSuccess: (r) => (r.ok ? toast.success(t("channels.testSent")) : toast.error(r.message || t("channels.testFailed"))),
     onError: (e) => toast.error(errorMessage(e)),
   })
@@ -297,17 +326,93 @@ export default function ChannelSettings() {
             </Section>
 
             {d.connected && (
-              <Section title={t("channels.testTitle")} description="Gửi tin nhắn thử tới một user/thread ID qua Deplao T123.">
-                <div className="grid gap-4 sm:grid-cols-[200px_1fr_auto] sm:items-end">
-                  <Field label="User / Thread ID">
-                    <Input value={dTest.conversationId} onChange={(e) => setDTest({ ...dTest, conversationId: e.target.value })} />
-                  </Field>
-                  <Field label={t("channels.message")} optional>
-                    <Input value={dTest.text} onChange={(e) => setDTest({ ...dTest, text: e.target.value })} />
-                  </Field>
-                  <Button variant="outline" onClick={() => sendTest.mutate()} disabled={!dTest.conversationId || sendTest.isPending}>
-                    {sendTest.isPending && <Spinner />} {t("channels.sendTest")}
-                  </Button>
+              <Section
+                title={t("channels.testTitle")}
+                description="Chọn người nhận từ danh bạ/hội thoại hoặc nhập User / Thread ID để gửi tin nhắn thử."
+                actions={
+                  connections.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => loadRecipients.mutate(dTest.accountId || connections[0]?.accountId)}
+                      disabled={loadRecipients.isPending}
+                    >
+                      {loadRecipients.isPending ? <Spinner /> : <RefreshCw className="size-3.5" />}
+                      <span className="ml-1.5">Tải danh bạ</span>
+                    </Button>
+                  )
+                }
+              >
+                <div className="space-y-4">
+                  {connections.length > 0 && (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="Tài khoản gửi">
+                        <select
+                          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                          value={dTest.accountId || connections[0]?.accountId || ""}
+                          onChange={(e) => {
+                            const accId = e.target.value
+                            setDTest({ ...dTest, accountId: accId, conversationId: "" })
+                            setRecipients([])
+                            loadRecipients.mutate(accId)
+                          }}
+                        >
+                          {connections.map((c) => (
+                            <option key={c.id} value={c.accountId}>
+                              {c.accountName} ({c.channel})
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Chọn nhanh từ danh bạ / hội thoại" optional>
+                        <select
+                          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                          value={dTest.conversationId}
+                          onFocus={() => {
+                            if (recipients.length === 0 && !loadRecipients.isPending) {
+                              loadRecipients.mutate(dTest.accountId || connections[0]?.accountId)
+                            }
+                          }}
+                          onChange={(e) => {
+                            const selected = recipients.find((r) => r.threadId === e.target.value)
+                            setDTest({
+                              ...dTest,
+                              conversationId: e.target.value,
+                              type: selected?.type ?? "user",
+                            })
+                          }}
+                        >
+                          <option value="">
+                            {loadRecipients.isPending
+                              ? "Đang tải danh bạ..."
+                              : recipients.length > 0
+                                ? "-- Chọn người nhận --"
+                                : "-- Bấm để tải danh bạ --"}
+                          </option>
+                          {recipients.map((r) => (
+                            <option key={r.threadId} value={r.threadId}>
+                              {r.displayName} {r.type === "group" ? "[Nhóm]" : r.phone ? `(${r.phone})` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                  )}
+                  <div className="grid gap-4 sm:grid-cols-[200px_1fr_auto] sm:items-end">
+                    <Field label="User / Thread ID">
+                      <Input
+                        value={dTest.conversationId}
+                        onChange={(e) => setDTest({ ...dTest, conversationId: e.target.value })}
+                        placeholder="Chọn ở trên hoặc nhập ID"
+                      />
+                    </Field>
+                    <Field label={t("channels.message")} optional>
+                      <Input value={dTest.text} onChange={(e) => setDTest({ ...dTest, text: e.target.value })} />
+                    </Field>
+                    <Button variant="outline" onClick={() => sendTest.mutate()} disabled={!dTest.conversationId || sendTest.isPending}>
+                      {sendTest.isPending && <Spinner />} {t("channels.sendTest")}
+                    </Button>
+                  </div>
                 </div>
               </Section>
             )}

@@ -19,6 +19,7 @@ public class DeplaoOptions
 }
 
 public record DeplaoAccount(string Id, string Channel, string Name, bool Online, string? Status);
+public record DeplaoRecipient(string ThreadId, string DisplayName, string Type, string? Phone);
 public record DeplaoDeliveryResult(bool Ok, string? OutboundId, string? Status, string Message);
 public record DeplaoWebhookRegistration(bool Ok, string? WebhookId, string Message);
 
@@ -368,6 +369,52 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             log.LogDebug(ex, "AbortZaloQrAsync failed");
+        }
+    }
+
+    public async Task<(bool Ok, List<DeplaoRecipient> Recipients, bool NeedsReauth, string? Error)> GetRecipientsAsync(Tenant t, string accountId, CancellationToken ct = default)
+    {
+        var apiKey = ResolveApiKey(t);
+        if (string.IsNullOrWhiteSpace(apiKey)) return (false, [], false, "Deplao API key is not configured.");
+        try
+        {
+            var url = $"{ResolveBaseUrl(t)}/accounts/{Uri.EscapeDataString(accountId)}/conversations?limit=50";
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            var resp = await http.SendAsync(req, ct);
+            var raw = await resp.Content.ReadAsStringAsync(ct);
+            if ((int)resp.StatusCode is 401 or 403) return (false, [], true, raw);
+            if (!resp.IsSuccessStatusCode) return (false, [], false, $"HTTP {(int)resp.StatusCode}: {raw}");
+
+            var json = JsonSerializer.Deserialize<JsonElement>(raw);
+            var list = new List<DeplaoRecipient>();
+            JsonElement arr = default;
+            if (json.ValueKind == JsonValueKind.Array) arr = json;
+            else if (json.TryGetProperty("data", out var d))
+            {
+                if (d.ValueKind == JsonValueKind.Array) arr = d;
+                else if (d.ValueKind == JsonValueKind.Object && d.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array) arr = items;
+            }
+            else if (json.TryGetProperty("items", out var items2) && items2.ValueKind == JsonValueKind.Array) arr = items2;
+
+            if (arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in arr.EnumerateArray())
+                {
+                    var tid = Str(item, "thread_id") ?? Str(item, "id");
+                    if (string.IsNullOrWhiteSpace(tid)) continue;
+                    var name = Str(item, "display_name") ?? Str(item, "name") ?? tid;
+                    var type = Str(item, "type") ?? "user";
+                    var phone = Str(item, "phone");
+                    list.Add(new DeplaoRecipient(tid, string.IsNullOrWhiteSpace(name) ? tid : name, type, phone));
+                }
+            }
+            return (true, list, false, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "GetRecipientsAsync failed");
+            return (false, [], false, ex.Message);
         }
     }
 

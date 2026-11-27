@@ -194,7 +194,7 @@ public class ChannelsController(ISecretProtector secrets, ZaloClient zaloClient,
 
 public record DeplaoConnectRequest(string? BaseUrl, string? ApiKey, string? AccountId, string? WebhookSecret, bool AutoRegisterWebhook = false);
 public record DeplaoAccountsRequest(string? BaseUrl, string? ApiKey);
-public record DeplaoTestRequest(string ConversationId, string? Text, string? AccountId);
+public record DeplaoTestRequest(string ConversationId, string? Text, string? AccountId, string? Type = null);
 public record ChannelConnectionRequest(string Channel, string AccountId, string AccountName);
 public record ToggleConnectionRequest(bool IsEnabled);
 
@@ -478,6 +478,33 @@ public class DeplaoChannelsController(
         return new { ok = reg.Ok, webhookId = reg.WebhookId, message = reg.Message };
     }
 
+    [HttpGet("recipients")]
+    public async Task<object> GetRecipients([FromQuery] string? accountId)
+    {
+        var t = await CurrentTenantAsync();
+        await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted);
+        var accId = string.IsNullOrWhiteSpace(accountId)
+            ? (await Db.ChannelConnections.Where(c => c.IsEnabled).OrderBy(c => c.CreatedAt).Select(c => c.AccountId).FirstOrDefaultAsync(HttpContext.RequestAborted) ?? t.DeplaoAccountId)
+            : accountId.Trim();
+        if (string.IsNullOrWhiteSpace(accId))
+            return new { ok = true, recipients = Array.Empty<DeplaoRecipient>() };
+
+        // Ensure the requested accountId belongs to this tenant
+        var ownsAccount = t.DeplaoAccountId == accId || await Db.ChannelConnections.AnyAsync(c => c.AccountId == accId, HttpContext.RequestAborted);
+        if (!ownsAccount)
+            throw AppException.BadRequest("forbidden_account", "Account does not belong to this workspace.");
+
+        var (ok, recipients, needsReauth, error) = await deplaoClient.GetRecipientsAsync(t, accId, HttpContext.RequestAborted);
+        if (!ok && needsReauth)
+        {
+            t.DeplaoApiKeyEnc = null;
+            await Db.SaveChangesAsync();
+            if (await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted))
+                (ok, recipients, _, error) = await deplaoClient.GetRecipientsAsync(t, accId, HttpContext.RequestAborted);
+        }
+        return new { ok, recipients, error };
+    }
+
     [HttpPost("test")]
     public async Task<object> Test(DeplaoTestRequest req)
     {
@@ -487,7 +514,8 @@ public class DeplaoChannelsController(
         if (string.IsNullOrWhiteSpace(req.ConversationId))
             throw new AppException(400, "validation", "Enter a user/thread id.", new Dictionary<string, string[]> { ["conversationId"] = ["required"] });
         var text = string.IsNullOrWhiteSpace(req.Text) ? $"Test message from {t.Name} via Stayra + Deplao T123." : req.Text.Trim();
-        var res = await deplaoClient.SendDeliveryAsync(t, req.AccountId, req.ConversationId.Trim(), text, "user", HttpContext.RequestAborted);
+        var threadType = req.Type == "group" ? "group" : "user";
+        var res = await deplaoClient.SendDeliveryAsync(t, req.AccountId, req.ConversationId.Trim(), text, threadType, HttpContext.RequestAborted);
         return new { ok = res.Ok, outboundId = res.OutboundId, status = res.Status, message = res.Message };
     }
 
