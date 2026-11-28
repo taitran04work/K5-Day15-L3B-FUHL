@@ -1,37 +1,10 @@
-> Đây là khung repo nộp bài. Điền mọi chỗ `____`, giữ nguyên tên các mục. **Mục 0 xoá đi sau khi tạo repo xong.**
-> Giờ, mốc, luật, rubric: xem `README.md`, `02-guide.md`, `03-rubric.md` trong repo đề (bộ đề BTC phát).
-
 # FUHL — Đặt phòng homestay qua chatbot Stayra
 
 **Thành viên, lớp, track:** xem [TEAMS.md](TEAMS.md). **Điền TEAMS.md đúng format**: khi chấm và đánh giá, BTC quét file này để ghép điểm cho từng người.
 
 Khách nhắn nhu cầu ở theo đêm, chọn phòng còn trống, xem giá và xác nhận bản tóm tắt. Stayra giữ phòng và gửi thẻ đặt cọc để khách tự thanh toán. Chat báo xác nhận đặt phòng sau khi hệ thống ghi nhận cọc. [Canvas](canvas.md) · [Đặc tả](spec.md)
 
-**Demo chatbot.** Chạy `docker compose up --build`, mở `http://localhost:5173/h/pine-hill` và vào cửa sổ chat. Mục 4 trong tài liệu demo hướng dẫn thử từ tin nhắn đầu đến mã giữ phòng và thẻ cọc, gồm cả chế độ ngoại tuyến. Các lệnh Python bên dưới là khung nộp bài, hiện chưa gọi luồng chat .NET. [Kịch bản demo](docs/DEMO.md)
-
----
-
-## 0. Tạo repo nhóm từ khung này *(guide bước 1.0 — xoá mục này khi xong)*
-
-**Hai luật:** repo **mới, công khai (Public)** · tên `K5-Day15-<lớp>-<tên nhóm>`, vd `K5-Day15-L3A-StudyPulse` (tên nhóm viết liền, không dấu). Chép **nội dung bên trong** `starter-repo/` — `README.md`, `run.py` phải nằm ngay ở trang đầu repo.
-
-**(a) Không cần terminal — làm trên web GitHub**
-1. **New repository** → tên theo mẫu → **Public** → không tick thêm gì → tạo.
-2. Trên máy mở thư mục `starter-repo/`, **bật hiện file ẩn** (Mac Finder: `Cmd + Shift + .` · Windows: View → Show → Hidden items) để thấy `.gitignore`, `.env.example`.
-3. Trên repo vừa tạo: **Add file → Upload files** → **kéo thả** tất cả file và thư mục bên trong `starter-repo/` → **Commit changes**. Kéo thả mới giữ được thư mục con; lỗi vì nhiều file quá thì tải từng thư mục.
-4. Kiểm: có `.gitignore` chưa (hay thiếu nhất). Thiếu thì **Add file → Create new file**, tên `.gitignore`, dán nội dung từ máy.
-5. Từ giờ sửa file ngay trên web (biểu tượng bút chì → Commit). Phần code vẫn cần **một** người chạy được trên máy: trước mỗi lượt chạy tải **Code → Download ZIP** về thư mục mới (mang `.env` sang), chạy xong chỉ upload file kết quả và file vừa sửa; trong lúc đang chạy không ai sửa `eval/benchmark.csv` trên web.
-
-**(b) Dùng git**
-```bash
-git clone https://github.com/<tai-khoan>/K5-Day15-L3A-TenNhom.git
-cd K5-Day15-L3A-TenNhom
-cp -R ../duong-dan-toi/starter-repo/. .      # Windows PowerShell: Copy-Item -Recurse -Force ..\duong-dan-toi\starter-repo\* .
-git status                                   # không được có .env, data-btc/
-git add -A && git commit -m "Khung repo từ starter-repo" && git push
-```
-
-**Xong khi:** mở link repo bằng **cửa sổ ẩn danh** thấy được file (link nộp CP1) · đã mời thành viên (Settings → Collaborators) · đã điền `TEAMS.md` và `python run.py check` không báo gì ở phần "Kiểm TEAMS.md".
+**Demo chatbot.** Chạy `docker compose up --build`, mở `http://localhost:5173/h/pine-hill` và vào cửa sổ chat. Mục 4 trong tài liệu demo hướng dẫn thử từ tin nhắn đầu đến mã giữ phòng và thẻ cọc, gồm cả chế độ ngoại tuyến. Các lệnh Python bên dưới là khung nộp bài, hiện chưa gọi luồng chat .NET. [Kịch bản demo](docs/DEMO.md) · [Video demo dự phòng](https://drive.google.com/file/d/1zM6u927EeXqWYgCyebcc3mbt9bf3MvIb/view?usp=sharing)
 
 ---
 
@@ -110,14 +83,14 @@ Nhóm dùng stack khác (Node, Streamlit, notebook…): sửa hàm `run_app()` t
 
 | Thành phần | Thật / Giả | Ghi chú |
 |---|---|---|
-| Lời gọi AI ở quyết định trung tâm | **Thật** (bắt buộc từ CP3) | Model: ____ |
-|  |  |  |
+| Lời gọi AI ở quyết định trung tâm | **Thật** (bắt buộc từ CP3) | Model: `claude-haiku-5-5` (gọi thật qua Anthropic API ở cả `Stayra` `ConciergeService.cs` và khung Python `codebase/ai.py`; token thật ghi trong `eval/run-1.csv`, `eval/run-2.csv`, `cost/simulate-1.csv`) |
+| Công cụ tra phòng, tính giá, giữ chỗ & nội quy | **Thật** (logic deterministic) | `Stayra` (.NET + Postgres `btree_gist` chống đặt trùng, seed `Pine Hill` & `Sea Breeze`); `codebase/tools.py` tra từ bản trích `data/homestay_data.json` |
+| Thanh toán MoMo & kênh Zalo | **Sandbox / Mô phỏng dev** | MoMo sandbox (`test-payment.momo.vn`) hoặc nút giả lập thanh toán ở Development; Zalo có webhook thật + trang `/dev/zalo-simulator` |
+| Bằng chứng khảo sát pain | **Thật** | 42 phiếu khảo sát người ngoài nhóm (`20` khách `G01`–`G20`, `22` chủ `H01`–`H22`) tại `evidence/survey/` |
 
 ## Dùng AI vào việc gì
 
-2–3 dòng (bắt buộc): nhóm dùng công cụ AI nào để làm gì, người kiểm lại phần nào. Chi tiết: [docs/ai-usage.md](docs/ai-usage.md). Coding agent đọc [AGENTS.md](AGENTS.md).
-
-____
+Nhóm sử dụng Claude Code / Antigravity hỗ trợ dựng khung web Stayra (.NET/React), hoàn thiện vòng lặp gọi công cụ trong `codebase/agent.py` và `codebase/tools.py`, viết script đếm khảo sát (`evidence/count.py`), hỗ trợ soạn tài liệu, xuất `demo-slides.pdf` và tạo video demo có lồng tiếng (`docs/demo-ai-30s.mp4`). Toàn bộ logic tính giá/lịch deterministic, dữ liệu khảo sát 42 người thật, bộ câu thử và việc chấm `pass/fail` 24 câu (`eval/run-1.csv`, `eval/run-2.csv`), cấu hình chi phí (`cost/personas.yaml`) và kiểm thử chạy thật đều do các thành viên trực tiếp rà soát và xác minh. Chi tiết: [docs/ai-usage.md](docs/ai-usage.md). Coding agent đọc [AGENTS.md](AGENTS.md).
 
 ## File mẫu — điền ở bước nào
 
@@ -149,5 +122,5 @@ ____
 | 4 | Bản chạy thử làm trọn lát cắt | `codebase/` · lệnh ở mục "Lệnh" |
 | 5 | Định nghĩa "tốt" + bộ câu thử | `data/DATA_CARD.md` · `eval/` |
 | 6 | Mô phỏng chi phí khi dùng thật | `cost/` |
-| 7 | Slide + demo + video dự phòng | `demo-slides.pdf` ở thư mục gốc · link video: ____ |
+| 7 | Slide + demo + video dự phòng | `demo-slides.pdf` ở thư mục gốc · [docs/demo-ai-30s.mp4](docs/demo-ai-30s.mp4) · link video: https://drive.google.com/file/d/1zM6u927EeXqWYgCyebcc3mbt9bf3MvIb/view?usp=sharing |
 | + | *Bonus:* người dùng thử | `validation/log.md` |
