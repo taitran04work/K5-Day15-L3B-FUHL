@@ -204,7 +204,6 @@ public class DeplaoChannelsController(
     ISecretProtector secrets,
     DeplaoClient deplaoClient,
     IOptions<DeplaoOptions> deplaoOptions,
-    IOptions<MomoOptions> momo,
     IConfiguration config) : OwnerControllerBase
 {
     [HttpGet]
@@ -225,7 +224,14 @@ public class DeplaoChannelsController(
     public async Task<object> StartZaloQr()
     {
         var t = await CurrentTenantAsync();
-        await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted);
+        var provisioned = await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted);
+        if (!deplaoClient.IsConnected(t))
+        {
+            var reason = string.IsNullOrWhiteSpace(deplaoOptions.Value.WebPassword)
+                ? "Thiếu cấu hình Deplao__WebPassword trên API."
+                : $"Không kết nối được tới Deplao Engine ({deplaoClient.ResolveBaseUrl(t)}) hoặc sai DEPLAO_WEB_PASSWORD (provisioned={provisioned}).";
+            throw AppException.BadRequest("deplao_not_configured", reason);
+        }
         var res = await deplaoClient.StartZaloQrAsync(t, HttpContext.RequestAborted);
         if (res.Forbidden)
         {
@@ -548,7 +554,7 @@ public class DeplaoChannelsController(
 
     private string WebhookUrlFor(Tenant t)
     {
-        var apiBase = (config["Deplao:WebhookBaseUrl"] ?? config["App:PublicApiUrl"] ?? momo.Value.IpnBaseUrl).TrimEnd('/');
+        var apiBase = (config["Deplao:WebhookBaseUrl"] ?? config["App:PublicApiUrl"] ?? "http://api:8080").TrimEnd('/');
         return $"{apiBase}/api/channels/deplao/{t.Slug}/webhook";
     }
 
