@@ -6,14 +6,17 @@
 
 - Tên nhóm: FUHL
 - Lớp: L3B
-- Track:
-- Link repo: ____
+- Track: C
+- Link repo: [github.com/taitran04work/K5-Day15-L3B-FUHL](https://github.com/taitran04work/K5-Day15-L3B-FUHL)
 
-| STT | Họ và tên | Mã học viên | Vai trò       | Phần việc chính |
-| --- | ------------ | -------------- | -------------- | ------------------ |
-| 1   | ____         | ____           | Đội trưởng | ____               |
-| 2   | ____         | ____           | Thành viên   | ____               |
-| 3   | ____         | ____           | Thành viên   | ____               |
+| STT | Họ và tên         | Mã học viên | Vai trò       | Phần việc chính      |
+| --- | -------------------- | -------------- | -------------- | ----------------------- |
+| 1   | Trần Hữu Tài      | 2A202603944    | Đội trưởng | xây base               |
+| 2   | Nguyễn Thành Công | 2A202603789    | Thành viên   | làm chatbot trên web  |
+| 3   | Đồng Văn Quyến   | 2A202603769    | Thành viên   | hoàn thiện doc        |
+| 4   | Nguyễn Ngọc Bách  | 2A202604108    | Thành viên   | tích hợp ai với zalo |
+
+
 
 **Quy tắc điền**
 

@@ -85,11 +85,17 @@ public interface IGuestMessenger
 
 public record EmailMessage(string To, string Subject, string HtmlBody, string TextBody, string? ReplyTo = null);
 
+public interface IEmailNotifier
+{
+    Task SendBookingConfirmationAsync(Tenant tenant, Booking booking, Room? room, string language, CancellationToken ct = default);
+}
+
 public interface IEmailSender
 {
     bool IsEnabled { get; }
     string WebBaseUrl => "http://localhost:5173";
     Task SendAsync(EmailMessage message, CancellationToken ct = default);
+    Task SendBookingConfirmationAsync(Tenant tenant, Booking booking, Room? room, string language, CancellationToken ct = default) => Task.CompletedTask;
 }
 
 public record Card(string Type, object Data);

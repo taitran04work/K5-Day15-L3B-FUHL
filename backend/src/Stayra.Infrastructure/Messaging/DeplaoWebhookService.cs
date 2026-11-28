@@ -16,6 +16,8 @@ public class DeplaoWebhookService(
     ITenantContext tenantContext,
     DeplaoClient deplao,
     ConciergeService concierge,
+    ConciergeReplyDebouncer debouncer,
+    IRealtimeNotifier realtime,
     TimeProvider clock,
     ILogger<DeplaoWebhookService> log)
 {
@@ -32,7 +34,9 @@ public class DeplaoWebhookService(
         catch (JsonException) { return new(false, "invalid_json", null, []); }
 
         var eventType = Str(root, "type");
-        if (!string.Equals(eventType, "message.received", StringComparison.OrdinalIgnoreCase))
+        var isReceived = string.Equals(eventType, "message.received", StringComparison.OrdinalIgnoreCase);
+        var isSent = string.Equals(eventType, "message.sent", StringComparison.OrdinalIgnoreCase);
+        if (!isReceived && !isSent)
             return new(true, "ignored_event", null, []);
 
         var mappedChannel = DeplaoClient.MapChannel(Str(root, "channel"));
@@ -44,7 +48,8 @@ public class DeplaoWebhookService(
         if (!data.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object)
             return new(false, "missing_message", null, []);
 
-        if (msg.TryGetProperty("is_self", out var isSelf) && isSelf.ValueKind == JsonValueKind.True)
+        var isSelf = msg.TryGetProperty("is_self", out var selfProp) && selfProp.ValueKind == JsonValueKind.True;
+        if (isReceived && isSelf)
             return new(true, "self_message", null, []);
 
         var msgType = Str(msg, "msg_type") ?? "text";
@@ -85,9 +90,10 @@ public class DeplaoWebhookService(
         if (string.IsNullOrWhiteSpace(threadId))
             return new(true, "no_thread", null, []);
 
+        ChannelConnection? connFilter = null;
         if (!string.IsNullOrWhiteSpace(accountId))
         {
-            var connFilter = await db.ChannelConnections
+            connFilter = await db.ChannelConnections
                 .FirstOrDefaultAsync(c => c.Channel == channelType && c.AccountId == accountId, ct);
             if (connFilter != null && !connFilter.IsEnabled)
                 return new(true, "connection_disabled", null, []);
@@ -108,11 +114,22 @@ public class DeplaoWebhookService(
             ? rawText
             : msgType.Equals("image", StringComparison.OrdinalIgnoreCase) ? "[image]" : "[attachment]";
 
-        var senderName = Str(msg, "sender_name")
-            ?? (data.TryGetProperty("conversation", out var convObj) && convObj.ValueKind == JsonValueKind.Object ? Str(convObj, "name") : null);
+        var convObj = data.TryGetProperty("conversation", out var co) && co.ValueKind == JsonValueKind.Object ? co : default;
+        var convDisplayName = convObj.ValueKind == JsonValueKind.Object
+            ? (Str(convObj, "display_name") ?? Str(convObj, "name"))
+            : null;
+        var msgSenderName = Str(msg, "sender_name");
+        var isGroup = string.Equals(Str(msg, "thread_type"), "group", StringComparison.OrdinalIgnoreCase)
+            || (convObj.ValueKind == JsonValueKind.Object && string.Equals(Str(convObj, "type"), "group", StringComparison.OrdinalIgnoreCase));
+        var resolvedName = !string.IsNullOrWhiteSpace(convDisplayName) ? convDisplayName : msgSenderName;
 
         var conv = await db.Conversations.FirstOrDefaultAsync(
             c => c.TenantId == tenant.Id && c.Channel == channelType && c.ExternalUserId == threadId, ct);
+
+        // Safety for message.sent: only sync Owner messages sent from the Zalo app if a conversation already exists
+        // OR the thread is explicitly whitelisted (never leak personal chats to unrelated friends).
+        if (isSent && conv == null && string.IsNullOrWhiteSpace(connFilter?.AllowedThreadIds))
+            return new(true, "sent_ignored_unknown_thread", null, []);
 
         if (conv == null)
         {
@@ -123,7 +140,7 @@ public class DeplaoWebhookService(
                 ExternalUserId = threadId,
                 ExternalAccountId = accountId ?? tenant.DeplaoAccountId,
                 Language = tenant.DefaultLanguage,
-                GuestName = senderName,
+                GuestName = resolvedName,
             };
             db.Conversations.Add(conv);
             await db.SaveChangesAsync(ct);
@@ -136,9 +153,10 @@ public class DeplaoWebhookService(
                 conv.ExternalAccountId = accountId;
                 changed = true;
             }
-            if (string.IsNullOrWhiteSpace(conv.GuestName) && !string.IsNullOrWhiteSpace(senderName))
+            if ((string.IsNullOrWhiteSpace(conv.GuestName) || string.Equals(conv.GuestName, "Zalo guest", StringComparison.OrdinalIgnoreCase))
+                && !string.IsNullOrWhiteSpace(resolvedName))
             {
-                conv.GuestName = senderName;
+                conv.GuestName = resolvedName;
                 changed = true;
             }
             if (changed) await db.SaveChangesAsync(ct);
@@ -151,22 +169,52 @@ public class DeplaoWebhookService(
                 return new(true, "duplicate", conv.Id, []);
         }
 
-        var messages = await concierge.HandleGuestMessageAsync(conv.Id, text, ct);
-        if (!string.IsNullOrWhiteSpace(msgId))
+        // Handle outbound messages sent directly by the Owner/Staff on the Zalo phone/desktop app
+        if (isSent)
         {
-            var guestMsg = messages.FirstOrDefault(m => m.Role == MessageRole.Guest);
-            if (guestMsg != null)
+            var cutoff = clock.GetUtcNow().AddSeconds(-30);
+            var alreadySentFromStayra = await db.Messages.AnyAsync(m =>
+                m.ConversationId == conv.Id
+                && (m.Role == MessageRole.Bot || m.Role == MessageRole.Owner)
+                && m.CreatedAt >= cutoff
+                && m.Content == text, ct);
+            if (alreadySentFromStayra)
+                return new(true, "duplicate_outbound", conv.Id, []);
+
+            var ownerMsg = new DomainMessage
             {
-                var tracked = await db.Messages.FirstOrDefaultAsync(m => m.Id == guestMsg.Id, ct);
-                if (tracked != null)
-                {
-                    tracked.ExternalMessageId = msgId;
-                    await db.SaveChangesAsync(ct);
-                }
+                ConversationId = conv.Id,
+                Role = MessageRole.Owner,
+                Content = text,
+                ExternalMessageId = msgId,
+                CreatedAt = clock.GetUtcNow(),
+            };
+            db.Messages.Add(ownerMsg);
+            conv.LastMessageAt = ownerMsg.CreatedAt;
+            conv.LastMessagePreview = text.Length > 140 ? text[..140] : text;
+            conv.UnreadCount = 0;
+            var statusChanged = conv.Status != ConversationStatus.HumanTakeover;
+            if (statusChanged)
+            {
+                conv.Status = ConversationStatus.HumanTakeover;
+                conv.NeedsAttention = false;
             }
+            await db.SaveChangesAsync(ct);
+
+            await realtime.MessageAdded(tenant.Id, conv.Id, MessageDto.From(ownerMsg));
+            if (statusChanged) await realtime.ConversationStatusChanged(conv.Id, conv.Status.ToString());
+            await realtime.ConversationUpdated(tenant.Id, conv.Id);
+            return new(true, "owner_synced", conv.Id, [ownerMsg]);
         }
 
-        return new(true, null, conv.Id, messages);
+        if (isGroup && !string.IsNullOrWhiteSpace(msgSenderName) && !string.Equals(msgSenderName, conv.GuestName, StringComparison.OrdinalIgnoreCase))
+            text = $"[{msgSenderName}]: {text}";
+
+        var (guestMsg, shouldRunBot) = await concierge.RecordGuestMessageAsync(conv.Id, text, msgId, ct);
+        if (shouldRunBot)
+            debouncer.Schedule(conv.Id);
+
+        return new(true, null, conv.Id, [guestMsg]);
     }
 
     private static string? Str(JsonElement el, string prop) =>

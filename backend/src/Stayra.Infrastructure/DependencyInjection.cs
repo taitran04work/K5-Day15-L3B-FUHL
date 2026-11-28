@@ -9,6 +9,7 @@ using Stayra.Application.Common;
 using Stayra.Application.Payments;
 using Stayra.Application.Pricing;
 using Stayra.Domain;
+using Stayra.Infrastructure.Concierge;
 using Stayra.Infrastructure.Messaging;
 using Stayra.Infrastructure.Payments;
 using Stayra.Infrastructure.Persistence;
@@ -38,7 +39,7 @@ public static class DependencyInjection
         services.AddHttpClient<IPaymentGateway, VnpayGateway>();
         services.Configure<ZaloOptions>(config.GetSection("Zalo"));
         services.AddHttpClient<ZaloClient>();
-        services.Configure<SmtpOptions>(o =>
+        services.Configure<Stayra.Infrastructure.Messaging.SmtpOptions>(o =>
         {
             config.GetSection("Smtp").Bind(o);
             if (string.IsNullOrWhiteSpace(o.WebBaseUrl)) o.WebBaseUrl = config["App:WebBaseUrl"] ?? "http://localhost:5173";
@@ -50,6 +51,7 @@ public static class DependencyInjection
         services.AddSingleton<IBookingConflictDetector, PostgresConflictDetector>();
         services.AddScoped<IJobScheduler, HangfireJobScheduler>();
         services.AddScoped<IGuestMessenger, GuestMessenger>();
+        services.AddSingleton<ConciergeReplyDebouncer>();
         services.AddScoped<IChannelAdapter, WebWidgetAdapter>();
         foreach (var ch in new[] { ChannelType.Zalo, ChannelType.Facebook, ChannelType.Telegram })
         {

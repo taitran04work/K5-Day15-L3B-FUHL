@@ -32,8 +32,23 @@ public partial class ConciergeService(
     public const int MaxInputChars = 2000;
     private const int HistoryLimit = 30;
 
-    /// <summary>Handles one inbound guest message. Returns the new guest-visible messages (guest + system + bot).</summary>
+    /// <summary>Handles one inbound guest message synchronously. Returns the new guest-visible messages (guest + system + bot).</summary>
     public async Task<List<DomainMessage>> HandleGuestMessageAsync(Guid conversationId, string text, CancellationToken ct = default)
+    {
+        var (guestMsg, shouldRunBot) = await RecordGuestMessageAsync(conversationId, text, null, ct);
+        if (shouldRunBot)
+            await RunAssistantReplyAsync(conversationId, ct);
+
+        return await db.Messages.Where(m => m.ConversationId == conversationId && m.CreatedAt >= guestMsg.CreatedAt && m.Role != MessageRole.Tool)
+            .OrderBy(m => m.CreatedAt).ToListAsync(ct);
+    }
+
+    /// <summary>Persists an inbound guest message immediately and returns whether the AI assistant should reply.</summary>
+    public async Task<(DomainMessage GuestMessage, bool ShouldRunBot)> RecordGuestMessageAsync(
+        Guid conversationId,
+        string text,
+        string? externalMessageId = null,
+        CancellationToken ct = default)
     {
         var conv = await db.Conversations.IgnoreQueryFilters().FirstAsync(c => c.Id == conversationId, ct);
         tenantContext.Set(conv.TenantId);
@@ -52,48 +67,68 @@ public partial class ConciergeService(
         if (reopenedFromClosed) await realtime.ConversationStatusChanged(conv.Id, conv.Status.ToString());
 
         var guestMsg = await messenger.SendAsync(conv.Id, MessageRole.Guest, text, null, conv.GuestName, ct);
-        var since = guestMsg.CreatedAt;
-
-        if (tenant.BotEnabled && conv.Status == ConversationStatus.Bot)
+        if (!string.IsNullOrWhiteSpace(externalMessageId))
         {
-            await realtime.Typing(conv.Id, true);
-            try
+            var tracked = await db.Messages.FirstOrDefaultAsync(m => m.Id == guestMsg.Id, ct);
+            if (tracked != null)
             {
-                var ctx = new ToolContext(tenant, conv);
-                string reply;
-                int inTok = 0, outTok = 0;
-                var client = ai.Client(tenant);
-                if (client is not null)
-                {
-                    try { (reply, inTok, outTok) = await RunClaudeAsync(client, ctx, ct); }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        log.LogError(ex, "Claude call failed for conversation {Id}; falling back to offline assistant", conv.Id);
-                        reply = await offline.ReplyAsync(ctx, text, ct);
-                    }
-                }
-                else reply = await offline.ReplyAsync(ctx, text, ct);
-
-                if (!string.IsNullOrWhiteSpace(reply) || ctx.Cards.Count > 0)
-                {
-                    var botMsg = await messenger.SendAsync(conv.Id, MessageRole.Bot, reply.Trim(), ctx.Cards, null, ct);
-                    if (inTok + outTok > 0)
-                    {
-                        var tracked = await db.Messages.FirstAsync(m => m.Id == botMsg.Id, ct);
-                        tracked.InputTokens = inTok;
-                        tracked.OutputTokens = outTok;
-                    }
-                }
+                tracked.ExternalMessageId = externalMessageId;
                 await db.SaveChangesAsync(ct);
-            }
-            finally
-            {
-                await realtime.Typing(conv.Id, false);
             }
         }
 
-        return await db.Messages.Where(m => m.ConversationId == conv.Id && m.CreatedAt >= since && m.Role != MessageRole.Tool)
-            .OrderBy(m => m.CreatedAt).ToListAsync(ct);
+        return (guestMsg, tenant.BotEnabled && conv.Status == ConversationStatus.Bot);
+    }
+
+    /// <summary>Runs the AI assistant for the conversation using the latest persisted history.</summary>
+    public async Task RunAssistantReplyAsync(Guid conversationId, CancellationToken ct = default)
+    {
+        var conv = await db.Conversations.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.Id == conversationId, ct);
+        if (conv == null) return;
+        tenantContext.Set(conv.TenantId);
+        var tenant = await db.Tenants.FirstOrDefaultAsync(t => t.Id == conv.TenantId, ct);
+        if (tenant == null || !tenant.BotEnabled || conv.Status != ConversationStatus.Bot) return;
+
+        var lastGuestText = await db.Messages
+            .Where(m => m.ConversationId == conv.Id && m.Role == MessageRole.Guest)
+            .OrderByDescending(m => m.CreatedAt)
+            .Select(m => m.Content)
+            .FirstOrDefaultAsync(ct) ?? "";
+
+        await realtime.Typing(conv.Id, true);
+        try
+        {
+            var ctx = new ToolContext(tenant, conv);
+            string reply;
+            int inTok = 0, outTok = 0;
+            var client = ai.Client(tenant);
+            if (client is not null)
+            {
+                try { (reply, inTok, outTok) = await RunClaudeAsync(client, ctx, ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    log.LogError(ex, "Claude call failed for conversation {Id}; falling back to offline assistant", conv.Id);
+                    reply = await offline.ReplyAsync(ctx, lastGuestText, ct);
+                }
+            }
+            else reply = await offline.ReplyAsync(ctx, lastGuestText, ct);
+
+            if (!string.IsNullOrWhiteSpace(reply) || ctx.Cards.Count > 0)
+            {
+                var botMsg = await messenger.SendAsync(conv.Id, MessageRole.Bot, reply.Trim(), ctx.Cards, null, ct);
+                if (inTok + outTok > 0)
+                {
+                    var tracked = await db.Messages.FirstAsync(m => m.Id == botMsg.Id, ct);
+                    tracked.InputTokens = inTok;
+                    tracked.OutputTokens = outTok;
+                }
+            }
+            await db.SaveChangesAsync(ct);
+        }
+        finally
+        {
+            await realtime.Typing(conv.Id, false);
+        }
     }
 
     /// <summary>Starts a conversation with a greeting in the right language.</summary>
