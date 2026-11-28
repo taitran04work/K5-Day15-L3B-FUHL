@@ -4,18 +4,19 @@
 > Giữ nguyên tên file `TEAMS.md` ở thư mục gốc repo, giữ nguyên các dòng `- Tên nhóm:` … và tiêu đề cột của bảng. Chỉ thay chỗ `____`.
 > Kiểm bằng `python run.py check`: phần "Kiểm TEAMS.md" không báo gì là đúng format.
 
-- Tên nhóm: ____
-- Lớp: ____
-- Track: ____
+- Tên nhóm: FUHL
+- Lớp: L3B
+- Track:
 - Link repo: ____
 
-| STT | Họ và tên | Mã học viên | Vai trò | Phần việc chính |
-|---|---|---|---|---|
-| 1 | ____ | ____ | Đội trưởng | ____ |
-| 2 | ____ | ____ | Thành viên | ____ |
-| 3 | ____ | ____ | Thành viên | ____ |
+| STT | Họ và tên | Mã học viên | Vai trò       | Phần việc chính |
+| --- | ------------ | -------------- | -------------- | ------------------ |
+| 1   | ____         | ____           | Đội trưởng | ____               |
+| 2   | ____         | ____           | Thành viên   | ____               |
+| 3   | ____         | ____           | Thành viên   | ____               |
 
 **Quy tắc điền**
+
 - **Lớp:** `L3A` hoặc `L3B`. **Track:** một chữ `A` (EdTech), `B` (Y tế), `C` (Du lịch), `D` (Thương mại điện tử), `E` (Tài chính) hoặc `F` (Làn khác). **Link repo:** link GitHub công khai của nhóm.
 - Mỗi thành viên một dòng, nhóm **3–5 người**. Thiếu thì thêm dòng theo đúng mẫu, thừa thì xoá dòng.
 - **Đội trưởng ở dòng 1**, cột Vai trò ghi đúng chữ `Đội trưởng`. Người khác ghi `Thành viên`.

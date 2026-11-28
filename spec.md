@@ -134,7 +134,11 @@ Các kịch bản dưới đây kết hợp kiểm thử luồng đặt phòng (
 
 ## §8. Chi phí khi dùng thật *(guide 4.2)*
 
-Đơn vị tính là một phiên chat đặt phòng. Token trung bình đo được từ `run-1` / `run-2` (`claude-haiku-5-5`) là ~4.655–5.148 tokens vào và ~628–656 tokens ra mỗi câu hỏi đơn lượt. Nhóm sẽ hoàn thiện bảng persona và chạy `python run.py simulate` (≥50 phiên) để tính chi phí/tháng ở [cost/cost-estimate.md](cost/cost-estimate.md).
+Đơn vị tính là một phiên chat hỏi/đặt phòng. Kết quả mô phỏng **50 phiên thật** (`simulate-1@20261128-124020`, `0/50` lỗi, seed `42`) theo 3 nhóm persona (`dung_it` 50%, `dung_vua` 35%, `dung_nhieu` 15%) với tỉ lệ đạt **`96%` (`23/24`)** từ `run-2@20261127-174553`:
+
+- **`claude-haiku-5-5`** (`$0.10` vào / `$0.50` ra mỗi 1M tokens): **`$0.0016` (≈ `41 ₫`) / phiên**, **`$0.0016` (≈ `43 ₫`) / task thành công**, tổng **`$0.5636/tháng` (≈ `14.671 ₫/tháng`)** cho 1 homestay cơ sở `300` khách/tháng (`$0.0019` ≈ `49 ₫/khách/tháng`).
+- **`claude-sonnet-5-5`** (đo token trên `claude-haiku-5-5`, tính giá `$2.00` vào / `$10.00` ra mỗi 1M tokens): **`$0.0327` (≈ `851 ₫`) / task thành công**, **`$11.27/tháng` (≈ `293.412 ₫/tháng`)** ở mức cơ sở.
+- Chi tiết bảng theo từng persona, 3 kịch bản (`150` / `300` / `750` khách/tháng) và đối chiếu impact xem tại [cost/cost-estimate.md](cost/cost-estimate.md) · [cost/simulate-1-summary.md](cost/simulate-1-summary.md).
 
 ## §9. Rủi ro & an toàn
 
@@ -152,3 +156,4 @@ Các kịch bản dưới đây kết hợp kiểm thử luồng đặt phòng (
 | 27/11/2026 | Xác định lại lát cắt từ nhu cầu của nhóm | Tập trung luồng khách đặt homestay qua chatbot đến khi nhận mã giữ phòng và thẻ cọc. |
 | 27/11/2026 (17:50) | Hoàn thiện lát cắt Python (`codebase/`), `eval/` (24 câu, 4 metric) & chạy `run-1`, `run-2`; cải tiến `concierge.md` & `ChatWidget.tsx` | Nối model thật `claude-haiku-5-5`, đo được 23/24 đạt (96%) ở cả 2 lượt và hợp nhất nội dung nhánh `cp1`. |
 | 27/11/2026 (23:55) | Hoàn thiện hồ sơ bằng chứng `evidence/summary.md`, `evidence/survey/*` (`n = 20` khách, `n = 22` chủ) và cập nhật `spec.md` §0–§2 | Kiểm chứng giả thuyết bằng dữ liệu khảo sát thật (80% khách gặp pain, 40% từng bỏ cuộc; 95,5% chủ tra lịch Excel/Sổ tay, 86,4% mất 1–4+ giờ/ngày) và lượng hóa Impact/tháng. |
+| 28/11/2026 (12:45) | Hoàn thiện `cost/personas.yaml`, chạy mô phỏng 50 phiên (`simulate-1`), điền `cost/cost-estimate.md`, cập nhật `spec.md` §8 và xuất `demo-slides.pdf` + video demo có lồng tiếng `docs/demo-ai-30s.mp4` | Hoàn thành hạng mục CP4: đo chi phí thực tế (`43 ₫/task`, `14.671 ₫/tháng` với `claude-haiku-5-5`) và chuẩn bị đầy đủ bộ slide + video dự phòng. |
