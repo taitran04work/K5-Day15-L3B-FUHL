@@ -104,4 +104,10 @@ public interface IEmailNotifier
     Task SendBookingConfirmationAsync(Tenant tenant, Booking booking, Room? room, string language, CancellationToken ct = default);
 }
 
+/// <summary>Sends per-tenant transactional emails using store SMTP settings when configured.</summary>
+public interface IEmailNotifier
+{
+    Task SendBookingConfirmationAsync(Tenant tenant, Booking booking, Room? room, string language, CancellationToken ct = default);
+}
+
 public record Card(string Type, object Data);

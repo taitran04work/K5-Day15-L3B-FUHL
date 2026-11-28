@@ -482,6 +482,42 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
         }
     }
 
+    /// <summary>
+    /// Looks up a Zalo user's public profile name. Webhook events only carry a name when the sender is already a
+    /// saved contact; strangers arrive with their numeric id as display_name, so the inbox needs this lookup.
+    /// </summary>
+    public async Task<string?> GetUserDisplayNameAsync(Tenant t, string accountId, string userId, CancellationToken ct = default)
+    {
+        var apiKey = ResolveApiKey(t);
+        if (string.IsNullOrWhiteSpace(apiKey)) return null;
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            using var req = new HttpRequestMessage(HttpMethod.Get,
+                $"{ResolveBaseUrl(t)}/accounts/{Uri.EscapeDataString(accountId)}/users/{Uri.EscapeDataString(userId)}");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            var resp = await http.SendAsync(req, timeout.Token);
+            if (!resp.IsSuccessStatusCode) return null;
+            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(timeout.Token);
+            var p = json.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d : json;
+            var name = Str(p, "displayName") ?? Str(p, "zaloName") ?? Str(p, "display_name") ?? Str(p, "name");
+            return IsPlaceholderName(name, userId) ? null : name!.Trim();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            log.LogDebug(ex, "Deplao user lookup failed for {UserId}", userId);
+            return null;
+        }
+    }
+
+    /// <summary>True when a "name" is missing or just the numeric id Deplao falls back to for unknown contacts.</summary>
+    public static bool IsPlaceholderName(string? name, string? id = null) =>
+        string.IsNullOrWhiteSpace(name)
+        || (id != null && string.Equals(name.Trim(), id, StringComparison.Ordinal))
+        || name.Trim().All(char.IsDigit)
+        || string.Equals(name.Trim(), "Zalo guest", StringComparison.OrdinalIgnoreCase);
+
     private static string? Str(JsonElement el, string prop) =>
         el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }
