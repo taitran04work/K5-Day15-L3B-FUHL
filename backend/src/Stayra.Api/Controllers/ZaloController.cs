@@ -224,7 +224,14 @@ public class DeplaoChannelsController(
     public async Task<object> StartZaloQr()
     {
         var t = await CurrentTenantAsync();
-        await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted);
+        var provisioned = await deplaoClient.EnsureProvisionedAsync(t, Db, WebhookUrlFor(t), HttpContext.RequestAborted);
+        if (!deplaoClient.IsConnected(t))
+        {
+            var reason = string.IsNullOrWhiteSpace(deplaoOptions.Value.WebPassword)
+                ? "Thiếu cấu hình Deplao__WebPassword trên API."
+                : $"Không kết nối được tới Deplao Engine ({deplaoClient.ResolveBaseUrl(t)}) hoặc sai DEPLAO_WEB_PASSWORD (provisioned={provisioned}).";
+            throw AppException.BadRequest("deplao_not_configured", reason);
+        }
         var res = await deplaoClient.StartZaloQrAsync(t, HttpContext.RequestAborted);
         if (res.Forbidden)
         {

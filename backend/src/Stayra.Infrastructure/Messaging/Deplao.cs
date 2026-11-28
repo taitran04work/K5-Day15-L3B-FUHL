@@ -87,7 +87,12 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
             };
             req.Headers.Add("X-Deplao-Admin-Password", options.Value.WebPassword);
             var resp = await http.SendAsync(req, ct);
-            if (!resp.IsSuccessStatusCode) return false;
+            if (!resp.IsSuccessStatusCode)
+            {
+                var errBody = await resp.Content.ReadAsStringAsync(ct);
+                log.LogWarning("Deplao provision-key failed for {Tenant} at {Url}: HTTP {Status} {Body}", t.Slug, rootUrl, (int)resp.StatusCode, errBody);
+                return false;
+            }
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(ct);
             var apiKey = Str(json, "apiKey");
             if (string.IsNullOrWhiteSpace(apiKey)) return false;
@@ -112,7 +117,7 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            log.LogDebug(ex, "Deplao auto-provision skipped for {Tenant}", t.Slug);
+            log.LogWarning(ex, "Deplao auto-provision failed for {Tenant} at {Url}", t.Slug, rootUrl);
             return false;
         }
     }
