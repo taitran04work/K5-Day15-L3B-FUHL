@@ -204,7 +204,6 @@ public class DeplaoChannelsController(
     ISecretProtector secrets,
     DeplaoClient deplaoClient,
     IOptions<DeplaoOptions> deplaoOptions,
-    IOptions<MomoOptions> momo,
     IConfiguration config) : OwnerControllerBase
 {
     [HttpGet]
@@ -548,7 +547,7 @@ public class DeplaoChannelsController(
 
     private string WebhookUrlFor(Tenant t)
     {
-        var apiBase = (config["Deplao:WebhookBaseUrl"] ?? config["App:PublicApiUrl"] ?? momo.Value.IpnBaseUrl).TrimEnd('/');
+        var apiBase = (config["Deplao:WebhookBaseUrl"] ?? config["App:PublicApiUrl"] ?? "http://api:8080").TrimEnd('/');
         return $"{apiBase}/api/channels/deplao/{t.Slug}/webhook";
     }
 
