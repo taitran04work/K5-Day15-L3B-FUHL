@@ -9,6 +9,7 @@ using Stayra.Application.Common;
 using Stayra.Application.Payments;
 using Stayra.Application.Pricing;
 using Stayra.Domain;
+using Stayra.Infrastructure.Concierge;
 using Stayra.Infrastructure.Messaging;
 using Stayra.Infrastructure.Payments;
 using Stayra.Infrastructure.Persistence;
@@ -50,6 +51,7 @@ public static class DependencyInjection
         services.AddSingleton<IBookingConflictDetector, PostgresConflictDetector>();
         services.AddScoped<IJobScheduler, HangfireJobScheduler>();
         services.AddScoped<IGuestMessenger, GuestMessenger>();
+        services.AddSingleton<ConciergeReplyDebouncer>();
         services.AddScoped<IChannelAdapter, WebWidgetAdapter>();
         foreach (var ch in new[] { ChannelType.Zalo, ChannelType.Facebook, ChannelType.Telegram })
         {

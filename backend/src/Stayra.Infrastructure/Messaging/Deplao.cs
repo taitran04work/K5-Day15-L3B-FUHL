@@ -244,7 +244,7 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
             return new(false, null, "Deplao T123 is not connected.");
 
         var baseUrl = ResolveBaseUrl(t);
-        var events = new[] { "message.received" };
+        var events = new[] { "message.received", "message.sent" };
 
         try
         {
