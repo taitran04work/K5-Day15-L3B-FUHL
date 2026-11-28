@@ -39,11 +39,7 @@ public static class DependencyInjection
         services.AddHttpClient<IPaymentGateway, VnpayGateway>();
         services.Configure<ZaloOptions>(config.GetSection("Zalo"));
         services.AddHttpClient<ZaloClient>();
-<<<<<<< Updated upstream
         services.Configure<Stayra.Infrastructure.Messaging.SmtpOptions>(o =>
-=======
-        services.Configure<Messaging.SmtpOptions>(o =>
->>>>>>> Stashed changes
         {
             config.GetSection("Smtp").Bind(o);
             if (string.IsNullOrWhiteSpace(o.WebBaseUrl)) o.WebBaseUrl = config["App:WebBaseUrl"] ?? "http://localhost:5173";

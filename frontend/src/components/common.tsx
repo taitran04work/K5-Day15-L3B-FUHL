@@ -104,8 +104,7 @@ export function StatusBadge({ status, kind = "booking", className }: { status: B
   )
 }
 
-export function Field({ label, htmlFor, error, hint, children, className, optional }: { label: string; htmlFor?: string; error?: string; hint?: string; children: ReactNode; className?: string; optional?: boolean }) {
-  const { t } = useTranslation()
+export function Field({ label, htmlFor, error, hint, children, className }: { label: string; htmlFor?: string; error?: string; hint?: string; children: ReactNode; className?: string; optional?: boolean }) {
   return (
     <div className={cn("space-y-1.5", className)}>
       <Label htmlFor={htmlFor} className="text-sm font-medium">
