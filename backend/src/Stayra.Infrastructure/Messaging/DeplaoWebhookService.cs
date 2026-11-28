@@ -94,7 +94,7 @@ public class DeplaoWebhookService(
         if (!string.IsNullOrWhiteSpace(accountId))
         {
             connFilter = await db.ChannelConnections
-                .FirstOrDefaultAsync(c => c.Channel == channelType && c.AccountId == accountId, ct);
+                .FirstOrDefaultAsync(c => c.TenantId == tenant.Id && c.Channel == channelType && c.AccountId == accountId, ct);
             if (connFilter != null && !connFilter.IsEnabled)
                 return new(true, "connection_disabled", null, []);
             if (connFilter != null && !string.IsNullOrWhiteSpace(connFilter.AllowedThreadIds))
@@ -106,6 +106,15 @@ public class DeplaoWebhookService(
                     log.LogDebug("Ignored webhook for non-whitelisted thread {ThreadId} on {AccountId}", threadId, accountId);
                     return new(true, "thread_not_whitelisted", null, []);
                 }
+            }
+
+            // Deplao fans every event out to every registered webhook (a webhook registered before the tenant
+            // linked an account listens to *all* accounts). Only answer for accounts this tenant actually owns,
+            // otherwise two homestays reply to the same guest through one Zalo account.
+            if (connFilter == null && !string.Equals(tenant.DeplaoAccountId, accountId, StringComparison.Ordinal))
+            {
+                log.LogDebug("Ignored webhook for account {AccountId} not linked to {Tenant}", accountId, tenant.Slug);
+                return new(true, "account_not_linked", null, []);
             }
         }
 
@@ -121,10 +130,20 @@ public class DeplaoWebhookService(
         var msgSenderName = Str(msg, "sender_name");
         var isGroup = string.Equals(Str(msg, "thread_type"), "group", StringComparison.OrdinalIgnoreCase)
             || (convObj.ValueKind == JsonValueKind.Object && string.Equals(Str(convObj, "type"), "group", StringComparison.OrdinalIgnoreCase));
-        var resolvedName = !string.IsNullOrWhiteSpace(convDisplayName) ? convDisplayName : msgSenderName;
+        var resolvedName = !DeplaoClient.IsPlaceholderName(convDisplayName, threadId) ? convDisplayName
+            : !DeplaoClient.IsPlaceholderName(msgSenderName) ? msgSenderName
+            : null;
 
         var conv = await db.Conversations.FirstOrDefaultAsync(
             c => c.TenantId == tenant.Id && c.Channel == channelType && c.ExternalUserId == threadId, ct);
+
+        // Guests who aren't saved contacts arrive with their numeric id as the name: ask Zalo for the profile name,
+        // once per conversation (only while we still don't have a real one).
+        if (resolvedName == null && isReceived && !isGroup && channelType == ChannelType.Zalo && !string.IsNullOrWhiteSpace(accountId)
+            && (conv == null || DeplaoClient.IsPlaceholderName(conv.GuestName, threadId)))
+        {
+            resolvedName = await deplao.GetUserDisplayNameAsync(tenant, accountId, threadId, ct);
+        }
 
         // Safety for message.sent: only sync Owner messages sent from the Zalo app if a conversation already exists
         // OR the thread is explicitly whitelisted (never leak personal chats to unrelated friends).
@@ -153,8 +172,7 @@ public class DeplaoWebhookService(
                 conv.ExternalAccountId = accountId;
                 changed = true;
             }
-            if ((string.IsNullOrWhiteSpace(conv.GuestName) || string.Equals(conv.GuestName, "Zalo guest", StringComparison.OrdinalIgnoreCase))
-                && !string.IsNullOrWhiteSpace(resolvedName))
+            if (DeplaoClient.IsPlaceholderName(conv.GuestName, threadId) && !string.IsNullOrWhiteSpace(resolvedName))
             {
                 conv.GuestName = resolvedName;
                 changed = true;
