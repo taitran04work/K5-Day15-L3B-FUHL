@@ -253,6 +253,23 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
 
         try
         {
+            // Reuse a subscription that already points at this URL (its id may never have been stored) and drop
+            // duplicates — each extra subscription would deliver every guest message again.
+            if (string.IsNullOrWhiteSpace(t.DeplaoWebhookId))
+            {
+                var existing = await ListWebhookIdsForUrlAsync(baseUrl, apiKey, webhookUrl, ct);
+                if (existing.Count > 0)
+                {
+                    t.DeplaoWebhookId = existing[0];
+                    foreach (var dup in existing.Skip(1))
+                    {
+                        using var del = new HttpRequestMessage(HttpMethod.Delete, $"{baseUrl}/webhooks/{Uri.EscapeDataString(dup)}");
+                        del.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                        await http.SendAsync(del, ct);
+                    }
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(t.DeplaoWebhookId))
             {
                 var patchBody = new
@@ -292,7 +309,9 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
                 return new(false, null, $"Deplao HTTP {(int)createResp.StatusCode}: {raw}");
 
             var json = JsonSerializer.Deserialize<JsonElement>(raw);
-            var id = Str(json, "id") ?? (json.TryGetProperty("webhook", out var wh) ? Str(wh, "id") : null);
+            // Deplao wraps responses as { data: { id, ... } }
+            var payload = json.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d : json;
+            var id = Str(payload, "id") ?? (payload.TryGetProperty("webhook", out var wh) ? Str(wh, "id") : null);
             return new(true, id, "Webhook registered on Deplao T123.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -300,6 +319,27 @@ public class DeplaoClient(HttpClient http, IOptions<DeplaoOptions> options, ISec
             log.LogWarning(ex, "Deplao webhook registration failed");
             return new(false, null, ex.Message);
         }
+    }
+
+    /// <summary>Ids of this key's webhook subscriptions whose url equals <paramref name="url"/>.</summary>
+    private async Task<List<string>> ListWebhookIdsForUrlAsync(string baseUrl, string apiKey, string url, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/webhooks");
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        var resp = await http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode) return [];
+        var json = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync(ct));
+        var list = json.ValueKind == JsonValueKind.Array ? json
+            : json.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Array ? d
+            : json.TryGetProperty("data", out var d2) && d2.ValueKind == JsonValueKind.Object && d2.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array ? items
+            : default;
+        if (list.ValueKind != JsonValueKind.Array) return [];
+        return list.EnumerateArray()
+            .Where(w => string.Equals(Str(w, "url")?.TrimEnd('/'), url.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+            .Select(w => Str(w, "id"))
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!)
+            .ToList();
     }
 
     public async Task<(bool Ok, string? TempId, bool Forbidden, string? Error)> StartZaloQrAsync(Tenant t, CancellationToken ct = default)

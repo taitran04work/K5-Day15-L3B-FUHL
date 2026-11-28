@@ -44,7 +44,9 @@ public static class DependencyInjection
             config.GetSection("Smtp").Bind(o);
             if (string.IsNullOrWhiteSpace(o.WebBaseUrl)) o.WebBaseUrl = config["App:WebBaseUrl"] ?? "http://localhost:5173";
         });
+        services.Configure<Services.SmtpOptions>(config.GetSection("Smtp"));
         services.AddScoped<IEmailSender, SmtpEmailSender>();
+        services.AddScoped<IEmailNotifier, SmtpEmailNotifier>();
         services.Configure<DeplaoOptions>(config.GetSection("Deplao"));
         services.AddHttpClient<DeplaoClient>();
 

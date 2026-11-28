@@ -110,7 +110,6 @@ export function Field({ label, htmlFor, error, hint, children, className, option
     <div className={cn("space-y-1.5", className)}>
       <Label htmlFor={htmlFor} className="text-sm font-medium">
         {label}
-        {optional && <span className="ml-1 font-normal text-muted-foreground">({t("common.optional")})</span>}
       </Label>
       {children}
       {error ? (

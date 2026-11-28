@@ -696,7 +696,7 @@ const vi = {
     apiKey: "Khóa API Anthropic", replaceKey: "Thay khóa mới", keyHint: "Lấy tại console.anthropic.com → API Keys. Khóa được kiểm tra, mã hóa và không bao giờ hiển thị lại.",
     verifySave: "Kiểm tra & lưu", show: "Hiện", hide: "Ẩn",
     model: "Mô hình", modelHint: "Mô hình lớn trả lời tốt hơn nhưng tốn chi phí hơn.",
-    models: { haiku: "Claude Haiku 5.5 — nhanh, tiết kiệm (khuyên dùng)", sonnet: "Claude Sonnet 5.5 — cân bằng", opus: "Claude Opus 5.5 — mạnh nhất" },
+    models: { haiku: "Claude Haiku 5.5", sonnet: "Claude Sonnet 5.5", opus: "Claude Opus 5.5" },
     test: "Kiểm tra kết nối", testOk: "Khóa hoạt động tốt", remove: "Gỡ khóa", saved: "Đã lưu khóa AI", removed: "Đã gỡ khóa AI",
     errors: { invalid_key: "Khóa không hợp lệ hoặc đã bị thu hồi.", model_unavailable: "Khóa không dùng được mô hình này.", quota: "Tài khoản hết hạn mức hoặc hết tín dụng.", unreachable: "Không kết nối được tới Anthropic, thử lại sau.", no_key: "Chưa có khóa." },
   },

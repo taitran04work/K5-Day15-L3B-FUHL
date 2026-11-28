@@ -29,7 +29,13 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund --ignore-scripts
 
 COPY . .
-RUN node node_modules/electron/install.js && npm run rebuild:native && npm run build:electron && npm run build:web
+# deplao/scripts/ is git-ignored upstream (deplao/.gitignore: scripts/*), so `npm run rebuild:native` can't run here.
+# Rebuild the one native module that must match Electron's ABI directly instead (sharp ships N-API prebuilds).
+# tsc over the Electron sources needs more than Node's default ~2 GB heap
+RUN export NODE_OPTIONS=--max-old-space-size=3584 \
+    && node node_modules/electron/install.js \
+    && npx --yes @electron/rebuild --force --only better-sqlite3 \
+    && npm run build:electron && npm run build:web
 
 ENV NODE_ENV=production \
     DEPLAO_WEB=1 \

@@ -36,7 +36,8 @@ public class BookingService(
     IBookingConflictDetector conflicts,
     TimeProvider clock,
     ILogger<BookingService> log,
-    IEmailSender? email = null) : IPaymentEvents
+    IEmailSender? email = null,
+    IEmailNotifier? emailNotifier = null) : IPaymentEvents
 {
     // ---------- Availability ----------
 
@@ -185,8 +186,6 @@ public class BookingService(
         }
         await db.SaveChangesAsync(ct);
         await realtime.BookingChanged(tenant.Id, booking.Id);
-        if (booking.Status == BookingStatus.Confirmed && email != null)
-            await email.SendBookingConfirmationAsync(tenant, booking, room, tenant.DefaultLanguage, ct);
         return booking;
     }
 
@@ -275,16 +274,17 @@ public class BookingService(
         if (to == BookingStatus.Confirmed)
             await SendConfirmationEmailAsync(tenant, booking, room, conversation?.Language ?? tenant.DefaultLanguage, ct);
         await realtime.BookingChanged(tenant.Id, booking.Id);
-        if (to == BookingStatus.Confirmed && email != null)
-        {
-            room ??= await db.Rooms.IgnoreQueryFilters().FirstOrDefaultAsync(r => r.Id == booking.RoomId, ct);
-            await email.SendBookingConfirmationAsync(tenant, booking, room, conversation?.Language ?? tenant.DefaultLanguage, ct);
-        }
     }
 
     private async Task SendConfirmationEmailAsync(Tenant tenant, Booking booking, Room? room, string language, CancellationToken ct)
     {
-        if (email == null || string.IsNullOrWhiteSpace(booking.GuestEmail)) return;
+        if (string.IsNullOrWhiteSpace(booking.GuestEmail)) return;
+        if (emailNotifier != null && !string.IsNullOrWhiteSpace(tenant.SmtpUsername) && !string.IsNullOrWhiteSpace(tenant.SmtpPasswordEnc))
+        {
+            await emailNotifier.SendBookingConfirmationAsync(tenant, booking, room, language, ct);
+            return;
+        }
+        if (email == null) return;
         try
         {
             var msg = BookingEmail.Confirmation(tenant, booking, room, language, email.WebBaseUrl);

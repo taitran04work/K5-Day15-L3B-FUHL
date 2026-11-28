@@ -204,6 +204,7 @@ public class DeplaoChannelsController(
     ISecretProtector secrets,
     DeplaoClient deplaoClient,
     IOptions<DeplaoOptions> deplaoOptions,
+    IOptions<VnpayOptions> vnpay,
     IConfiguration config) : OwnerControllerBase
 {
     [HttpGet]
@@ -554,7 +555,11 @@ public class DeplaoChannelsController(
 
     private string WebhookUrlFor(Tenant t)
     {
+<<<<<<< Updated upstream
         var apiBase = (config["Deplao:WebhookBaseUrl"] ?? config["App:PublicApiUrl"] ?? "http://api:8080").TrimEnd('/');
+=======
+        var apiBase = (config["Deplao:WebhookBaseUrl"] ?? config["App:PublicApiUrl"] ?? vnpay.Value.IpnBaseUrl).TrimEnd('/');
+>>>>>>> Stashed changes
         return $"{apiBase}/api/channels/deplao/{t.Slug}/webhook";
     }
 
